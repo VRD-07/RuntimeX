@@ -1,57 +1,75 @@
 import arxiv
+import httpx
 import logging
 from typing import List, Dict, Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def fetch_arxiv_papers(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+def search_semantic_scholar(query: str, max_results: int = 5) -> str:
     """
-    Fetches scientific research papers from ArXiv API based on query.
-    No API key required.
+    Finds recent academic papers, citation counts, and influential works on a research topic.
+    Returns formatted observation string.
     """
+    clean_query = query.strip()
     papers = []
+    
+    # 1. Attempt Semantic Scholar Graph API
     try:
-        search = arxiv.Search(
-            query=query,
-            max_results=max_results,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending
-        )
-        client = arxiv.Client()
-        for result in client.results(search):
-            paper_info = {
-                "title": result.title,
-                "summary": result.summary.replace("\n", " "),
-                "authors": [author.name for author in result.authors[:3]],
-                "published": result.published.strftime("%Y-%m-%d") if result.published else "N/A",
-                "pdf_url": result.pdf_url,
-                "entry_id": result.entry_id,
-                "source": "ArXiv Research"
-            }
-            papers.append(paper_info)
-            
+        url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={clean_query}&limit={max_results}&fields=title,authors,year,citationCount,abstract,url,venue"
+        headers = {"User-Agent": "IntelPulse-Autonomous-Agent/1.0"}
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(url, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                for item in data.get("data", []):
+                    papers.append({
+                        "title": item.get("title"),
+                        "authors": [a.get("name") for a in item.get("authors", [])[:3]],
+                        "year": item.get("year", "N/A"),
+                        "citations": item.get("citationCount", 0),
+                        "abstract": (item.get("abstract") or "No abstract available")[:250],
+                        "venue": item.get("venue", "Academic Publication"),
+                        "url": item.get("url", "#"),
+                        "source": "Semantic Scholar"
+                    })
     except Exception as e:
-        logger.error(f"Error fetching ArXiv papers: {e}")
-        papers = [
-            {
-                "title": f"Recent Advances in {query}: Architectural Survey",
-                "summary": f"This paper provides a comprehensive overview of autonomous agent systems, multi-agent communication protocols, and benchmarks related to {query}.",
-                "authors": ["A. Vaswani", "E. Horvitz", "Y. LeCun"],
-                "published": "2026-08-15",
-                "pdf_url": "https://arxiv.org/abs/2401.00001",
-                "entry_id": "2401.00001",
-                "source": "ArXiv Research (Fallback)"
-            },
-            {
-                "title": f"Evaluating Competitor Benchmarks in {query}",
-                "summary": f"Empirical study comparing agent performance across tool use, planning efficiency, and long-context reasoning for competitive intelligence.",
-                "authors": ["M. Jordan", "S. Thrun"],
-                "published": "2026-08-10",
-                "pdf_url": "https://arxiv.org/abs/2401.00002",
-                "entry_id": "2401.00002",
-                "source": "ArXiv Research (Fallback)"
-            }
-        ]
-        
-    return papers
+        logger.warning(f"Semantic Scholar API notice: {e}. Falling back to ArXiv API.")
+
+    # 2. ArXiv Fallback if Semantic Scholar yields no results or times out
+    if not papers:
+        try:
+            search = arxiv.Search(
+                query=clean_query,
+                max_results=max_results,
+                sort_by=arxiv.SortCriterion.Relevance,
+                sort_order=arxiv.SortOrder.Descending
+            )
+            client = arxiv.Client()
+            for result in client.results(search):
+                papers.append({
+                    "title": result.title,
+                    "authors": [a.name for a in result.authors[:3]],
+                    "year": result.published.strftime("%Y") if result.published else "N/A",
+                    "citations": "N/A",
+                    "abstract": result.summary.replace("\n", " ")[:250],
+                    "venue": "ArXiv Research",
+                    "url": result.pdf_url,
+                    "source": "ArXiv"
+                })
+        except Exception as e:
+            logger.error(f"Error fetching ArXiv papers: {e}")
+
+    if not papers:
+        return f"[Semantic Scholar Observation]: No academic papers found for '{clean_query}'."
+
+    formatted_items = []
+    for p in papers:
+        formatted_items.append(
+            f"- Title: {p['title']} ({p['year']}) | Citations: {p['citations']} | Source: {p['source']}\n"
+            f"  Authors: {', '.join(p['authors'])}\n"
+            f"  Abstract Snippet: {p['abstract']}...\n"
+            f"  URL: {p['url']}"
+        )
+
+    return f"[Semantic Scholar Observation per {papers[0]['source']}]: Found {len(papers)} academic publications for '{clean_query}':\n" + "\n".join(formatted_items)
