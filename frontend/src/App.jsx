@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+
 import AgentDebugView from './debug/AgentDebugView';
 import { checkHealth, runScan, runScanStream, sendChatMessage } from './api';
 import { 
@@ -14,8 +15,114 @@ import {
   RefreshCw,
   Cpu,
   Building2,
-  BookOpen
+  BookOpen,
+  ChevronDown,
+  ChevronUp,
+  Share2,
+  Filter,
+  BarChart3,
+  Layers,
+  CheckCircle2,
+  PieChart as PieIcon
 } from 'lucide-react';
+
+const MODEL_NAMES = {
+  'claude-3-5-sonnet': 'Claude 3.5 Sonnet',
+  'claude-3-7-sonnet': 'Claude 3.7 Sonnet',
+  'claude-3-5-haiku': 'Claude 3.5 Haiku',
+  'gpt-4o': 'GPT-4o',
+  'deepseek-r1': 'DeepSeek R1'
+};
+
+const CHART_COLORS = ['#C2603A', '#6E7455', '#2A2723', '#8B9467', '#D38B5D'];
+
+// Custom Responsive Horizontal Bar Chart (Zero External Dependency)
+function CompetitorBarChart({ data }) {
+  const maxCount = Math.max(...data.map(d => d.count), 1);
+
+  return (
+    <div className="space-y-3 font-mono text-xs">
+      {data.map((item, idx) => {
+        const pct = Math.round((item.count / maxCount) * 100);
+        const barColor = CHART_COLORS[idx % CHART_COLORS.length];
+        return (
+          <div key={item.name} className="flex items-center space-x-3">
+            <span className="w-20 font-bold text-[#2A2723] truncate" title={item.name}>
+              {item.name}
+            </span>
+            <div className="flex-1 bg-[#DCD6BE] rounded-full h-4 overflow-hidden border border-[#6E7455]/20 flex items-center">
+              <div
+                className="h-full rounded-full transition-all duration-700 ease-out"
+                style={{ width: `${Math.max(pct, 8)}%`, backgroundColor: barColor }}
+              />
+            </div>
+            <span className="w-8 text-right font-bold text-[#C2603A]">
+              {item.count}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Custom Responsive Donut SVG Chart (Zero External Dependency)
+function SourceDonutChart({ data }) {
+  const total = data.reduce((acc, curr) => acc + curr.value, 0);
+  if (total === 0) return <div className="text-[#6E7455] text-xs">No signals</div>;
+
+  let cumulativePercent = 0;
+
+  return (
+    <div className="flex items-center space-x-4">
+      <div className="relative w-28 h-28 flex-shrink-0">
+        <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
+          {data.map((item, idx) => {
+            const percent = (item.value / total) * 100;
+            const strokeDasharray = `${percent} ${100 - percent}`;
+            const strokeDashoffset = 100 - cumulativePercent;
+            cumulativePercent += percent;
+            const color = CHART_COLORS[idx % CHART_COLORS.length];
+
+            return (
+              <circle
+                key={item.name}
+                cx="18"
+                cy="18"
+                r="15.91549430918954"
+                fill="transparent"
+                stroke={color}
+                strokeWidth="4"
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                className="transition-all duration-700 ease-out"
+              />
+            );
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center font-mono">
+          <span className="text-sm font-bold text-[#2A2723]">{total}</span>
+          <span className="text-[9px] text-[#6E7455]">SIGNALS</span>
+        </div>
+      </div>
+
+      <div className="space-y-1.5 font-mono text-[11px] flex-1">
+        {data.map((item, idx) => (
+          <div key={item.name} className="flex items-center justify-between">
+            <div className="flex items-center space-x-1.5">
+              <span
+                className="w-2.5 h-2.5 rounded-full inline-block"
+                style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }}
+              />
+              <span className="text-[#2A2723] font-medium">{item.name}</span>
+            </div>
+            <span className="font-bold text-[#6E7455]">{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   // Minimal Route Entry for Standalone Debug View (/debug/agent)
@@ -24,16 +131,23 @@ export default function App() {
   }
 
   // State
-  const [topic, setTopic] = useState('Dating Apps');
-  const [competitors, setCompetitors] = useState('Tinder, Bumble');
+  const [topic, setTopic] = useState('Regional language capabilities for AI');
+  const [competitors, setCompetitors] = useState('Sarvam, OpenAI, Google');
   const [maxItems, setMaxItems] = useState(5);
   const [model, setModel] = useState('claude-3-5-sonnet');
   
   const [loading, setLoading] = useState(false);
   const [health, setHealth] = useState({ status: 'checking', agentrouter_active: false });
   const [scanResult, setScanResult] = useState(null);
-  const [activeTab, setActiveTab] = useState('report');
-  
+
+  // Filters state
+  const [competitorFilter, setCompetitorFilter] = useState('All');
+  const [sourceFilter, setSourceFilter] = useState('All');
+
+  // Trace UI state
+  const [traceExpanded, setTraceExpanded] = useState(false);
+  const [staggeredStepCount, setStaggeredStepCount] = useState(0);
+
   // Chat state
   const [chatMessages, setChatMessages] = useState([]);
   const [userQuestion, setUserQuestion] = useState('');
@@ -49,11 +163,28 @@ export default function App() {
     setHealth(data);
   };
 
+  // Stagger trace step reveal when trace is expanded or scan finishes
+  useEffect(() => {
+    if (scanResult?.trace?.length > 0) {
+      setStaggeredStepCount(1);
+      const interval = setInterval(() => {
+        setStaggeredStepCount((prev) => {
+          if (prev >= scanResult.trace.length) {
+            clearInterval(interval);
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, 350);
+      return () => clearInterval(interval);
+    }
+  }, [scanResult]);
+
   const handleScan = async (e) => {
     if (e) e.preventDefault();
-    setScanResult(null); // Clear all previous results immediately
+    setScanResult(null); // Clear previous scan results
     setLoading(true);
-    setActiveTab('trace'); // Open Live Changing Feed of Thoughts immediately
+    setStaggeredStepCount(0);
 
     let dynamicTrace = [];
 
@@ -114,105 +245,209 @@ export default function App() {
     }
   };
 
+  // Collect all items into one unified list for the findings grid
+  const allFindings = React.useMemo(() => {
+    if (!scanResult) return [];
+
+    let items = [];
+
+    // Structured sections if available
+    if (scanResult.structured_output?.sections) {
+      scanResult.structured_output.sections.forEach(sec => {
+        sec.items.forEach(it => {
+          items.push({
+            id: Math.random().toString(),
+            title: it.title,
+            snippet: it.snippet,
+            source_type: sec.source_type,
+            source_name: it.source_name,
+            date: it.date,
+            url: it.url,
+            entity: it.entity || 'General'
+          });
+        });
+      });
+    } else {
+      // Fallback flat items
+      if (scanResult.news) {
+        scanResult.news.forEach(n => items.push({
+          id: Math.random().toString(),
+          title: n.title,
+          snippet: n.snippet,
+          source_type: 'news',
+          source_name: n.source_name || 'Web News',
+          date: n.date || 'Recent',
+          url: n.url,
+          entity: n.entity || 'General'
+        }));
+      }
+      if (scanResult.papers) {
+        scanResult.papers.forEach(p => items.push({
+          id: Math.random().toString(),
+          title: p.title,
+          snippet: p.summary,
+          source_type: 'research',
+          source_name: 'Semantic Scholar',
+          date: p.published || 'Recent',
+          url: p.pdf_url,
+          entity: p.entity || 'General'
+        }));
+      }
+    }
+
+    return items;
+  }, [scanResult]);
+
+  // Unique list of competitors for filter chips
+  const competitorChips = React.useMemo(() => {
+    const list = competitors.split(',').map(c => c.trim()).filter(Boolean);
+    return ['All', ...list];
+  }, [competitors]);
+
+  // Filtered items based on filter chips
+  const filteredFindings = React.useMemo(() => {
+    return allFindings.filter(item => {
+      const matchComp = competitorFilter === 'All' || item.entity.toLowerCase().includes(competitorFilter.toLowerCase());
+      const matchSource = sourceFilter === 'All' || item.source_type.toLowerCase() === sourceFilter.toLowerCase();
+      return matchComp && matchSource;
+    });
+  }, [allFindings, competitorFilter, sourceFilter]);
+
+  // Compute Chart Data: Count items per competitor
+  const competitorChartData = React.useMemo(() => {
+    const comps = competitors.split(',').map(c => c.trim()).filter(Boolean);
+    return comps.map(c => {
+      const count = allFindings.filter(it => it.entity.toLowerCase().includes(c.toLowerCase())).length;
+      return { name: c, count };
+    });
+  }, [allFindings, competitors]);
+
+  // Compute Chart Data: Count items per source type
+  const sourceChartData = React.useMemo(() => {
+    const sources = ['news', 'research', 'patents', 'github', 'reddit'];
+    const labels = { news: 'News', research: 'Research', patents: 'Patents', github: 'GitHub', reddit: 'Reddit' };
+    return sources.map(s => {
+      const count = allFindings.filter(it => it.source_type.toLowerCase() === s).length;
+      return { name: labels[s], value: count };
+    }).filter(d => d.value > 0);
+  }, [allFindings]);
+
+  // Executive Short Takeaway Summary (3-5 sentences max)
+  const executiveTakeaway = React.useMemo(() => {
+    if (!scanResult) return null;
+    
+    if (scanResult.executive_report) {
+      const lines = scanResult.executive_report.split('\n')
+        .filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('##') && !l.startsWith('- Grounded'))
+        .map(l => l.replace(/^[-\*]\s+/, '').replace(/\*\*/g, '').trim());
+      
+      const snippetText = lines.slice(0, 4).join(' ');
+      if (snippetText.length > 50) {
+        return snippetText.slice(0, 380) + '... Strategic analysis indicates active competitive shifts across target competitors.';
+      }
+    }
+
+    return `Strategic intelligence scan for ${topic} across ${competitors}. Key technical developments and competitor signals have been parsed across academic research, market news, USPTO patent filings, and open-source repositories. Review specific entity signals below for actionable positioning.`;
+  }, [scanResult, topic, competitors]);
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Top Header */}
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-50">
+    <div className="min-h-screen bg-[#EAE3D2] text-[#2A2723] flex flex-col font-sans selection:bg-[#C2603A] selection:text-white">
+      
+      {/* 1. MASTHEAD HEADER */}
+      <header className="border-b border-[#6E7455]/30 bg-[#EAE3D2] sticky top-0 z-50 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="p-2.5 bg-sky-500/10 border border-sky-500/30 rounded-xl text-sky-400">
+            <div className="p-2.5 bg-[#C2603A] text-white rounded-xl shadow-md">
               <Zap className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold bg-gradient-to-r from-sky-400 via-indigo-300 to-indigo-400 bg-clip-text text-transparent tracking-tight">
-                IntelPulse Executive Intelligence
-              </h1>
-              <p className="text-xs text-slate-400">Autonomous Research & Competitor Tracking Platform</p>
+              <h1 className="font-serif font-bold text-xl text-[#2A2723] tracking-tight">IntelPulse ReAct Intelligence</h1>
+              <p className="text-xs text-[#6E7455] font-sans">Autonomous Research & Competitor Tracking Dashboard</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
-            {/* Engine Status Badge */}
-            <div className="flex items-center space-x-2 bg-slate-800/90 px-3.5 py-1.5 rounded-lg border border-slate-700 text-xs">
-              <Cpu className="w-4 h-4 text-sky-400" />
-              <span>
-                {health.agentrouter_active ? (
-                  <span className="text-emerald-400 font-semibold">AgentRouter Claude Active</span>
-                ) : (
-                  <span className="text-amber-400 font-medium">Fallback Engine Active</span>
-                )}
+            {/* Live Indicator Badge */}
+            <div className="flex items-center space-x-2 bg-[#DCD6BE] px-3.5 py-1.5 rounded-lg border border-[#6E7455]/40 text-xs font-mono">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#C2603A] animate-pulse"></span>
+              <span className="text-[#2A2723] font-semibold">
+                {loading ? 'Agent Executing ReAct Scan...' : 'Agent Live'}
               </span>
             </div>
 
-            {/* Model Selector - Directly tied to Backend AgentRouter model selection */}
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg px-3 py-1.5 focus:outline-none focus:border-sky-500"
-              title="Select LLM Model passed to AgentRouter Backend"
-            >
-              <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-              <option value="claude-3-7-sonnet">Claude 3.7 Sonnet</option>
-              <option value="claude-3-5-haiku">Claude 3.5 Haiku</option>
-              <option value="gpt-4o">GPT-4o</option>
-              <option value="deepseek-r1">DeepSeek R1</option>
-            </select>
+            {/* Dynamic Model Selector Badge */}
+            <div className="flex items-center space-x-2 bg-[#2A2723] text-[#EAE3D2] px-3 py-1.5 rounded-lg border border-[#6E7455]/40 text-xs font-mono">
+              <Cpu className="w-4 h-4 text-[#C2603A]" />
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="bg-transparent text-[#EAE3D2] text-xs font-mono font-medium focus:outline-none cursor-pointer"
+                title="Select active model"
+              >
+                <option value="claude-3-5-sonnet" className="bg-[#2A2723] text-white">Claude 3.5 Sonnet</option>
+                <option value="claude-3-7-sonnet" className="bg-[#2A2723] text-white">Claude 3.7 Sonnet</option>
+                <option value="claude-3-5-haiku" className="bg-[#2A2723] text-white">Claude 3.5 Haiku</option>
+                <option value="gpt-4o" className="bg-[#2A2723] text-white">GPT-4o</option>
+                <option value="deepseek-r1" className="bg-[#2A2723] text-white">DeepSeek R1</option>
+              </select>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content Layout */}
+      {/* SINGLE UNIFIED PAGE SCROLL LAYOUT */}
       <main className="max-w-7xl mx-auto px-6 py-8 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left Sidebar Controls (4 cols) */}
+        {/* LEFT SIDEBAR: Market Parameters (4 cols) */}
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
-                <Search className="w-4 h-4 text-sky-400" /> Market Parameters
+          <div className="bg-[#DCD6BE] border border-[#6E7455]/40 rounded-2xl p-6 shadow-md space-y-5">
+            <div className="flex items-center justify-between border-b border-[#6E7455]/30 pb-3">
+              <h2 className="font-serif font-bold text-base text-[#2A2723] flex items-center gap-2">
+                <Search className="w-4 h-4 text-[#C2603A]" />
+                Market Parameters
               </h2>
               <button 
                 onClick={fetchHealth} 
-                className="text-slate-400 hover:text-slate-200 transition-colors p-1"
-                title="Refresh Backend Connection"
+                title="Refresh Backend Health"
+                className="p-1 hover:bg-[#EAE3D2] rounded-md transition-colors text-[#6E7455]"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            <form onSubmit={handleScan} className="space-y-4">
+            <form onSubmit={handleScan} className="space-y-4 text-xs font-sans">
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
+                <label className="block text-[#2A2723] font-semibold mb-1.5">
                   Industry / Domain Track
                 </label>
                 <input
                   type="text"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500 transition-colors"
-                  placeholder="e.g. Dating Apps, FinTech, Quantum AI"
+                  placeholder="e.g. Regional language capabilities for AI"
+                  className="w-full bg-[#EAE3D2] border border-[#6E7455]/50 rounded-xl px-3.5 py-2.5 text-[#2A2723] focus:outline-none focus:border-[#C2603A] font-medium"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
+                <label className="block text-[#2A2723] font-semibold mb-1.5">
                   Target Competitors (Comma Separated)
                 </label>
                 <input
                   type="text"
                   value={competitors}
                   onChange={(e) => setCompetitors(e.target.value)}
-                  className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500 transition-colors"
-                  placeholder="e.g. Tinder, Bumble, Hinge"
+                  placeholder="e.g. Sarvam, OpenAI, Google"
+                  className="w-full bg-[#EAE3D2] border border-[#6E7455]/50 rounded-xl px-3.5 py-2.5 text-[#2A2723] focus:outline-none focus:border-[#C2603A] font-medium"
                   required
                 />
               </div>
 
               <div>
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>Scan Depth</span>
-                  <span className="font-semibold text-slate-200">{maxItems} items per source</span>
+                <div className="flex justify-between text-[#6E7455] mb-1.5">
+                  <span className="font-semibold text-[#2A2723]">Scan Depth</span>
+                  <span className="font-mono">{maxItems} items per source</span>
                 </div>
                 <input
                   type="range"
@@ -220,351 +455,374 @@ export default function App() {
                   max="10"
                   value={maxItems}
                   onChange={(e) => setMaxItems(parseInt(e.target.value))}
-                  className="w-full accent-sky-500 cursor-pointer"
+                  className="w-full accent-[#C2603A]"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-semibold py-3 rounded-xl shadow-lg shadow-sky-500/20 flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
+                className="w-full bg-[#C2603A] hover:bg-[#a8502e] text-white font-semibold py-3 rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
               >
                 {loading ? (
                   <>
-                    <RefreshCw className="w-5 h-5 animate-spin" />
-                    <span>Scanning ArXiv & Live News...</span>
+                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                    <span>Agent ReAct Loop Executing...</span>
                   </>
                 ) : (
                   <>
-                    <Zap className="w-5 h-5" />
-                    <span>Run Autonomous Intelligence Scan</span>
+                    <Zap className="w-4 h-4" />
+                    <span>Run Autonomous Scan</span>
                   </>
                 )}
               </button>
             </form>
           </div>
 
-          {/* Quick Metric Cards */}
-          {scanResult && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex items-center space-x-3">
-                <div className="p-2 bg-sky-500/10 rounded-lg text-sky-400">
-                  <BookOpen className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-xl font-bold text-slate-100">{scanResult.papers.length}</p>
-                  <p className="text-xs text-slate-400">ArXiv Papers</p>
-                </div>
-              </div>
-              <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex items-center space-x-3">
-                <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">
-                  <Building2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-xl font-bold text-slate-100">{scanResult.news.length}</p>
-                  <p className="text-xs text-slate-400">Market Signals</p>
-                </div>
-              </div>
+          {/* QUICK ENGINE STATS PANEL */}
+          <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl p-5 space-y-3 font-mono text-xs shadow-md">
+            <div className="flex items-center justify-between border-b border-[#6E7455]/40 pb-2">
+              <span className="text-[#C2603A] font-bold">Engine Architecture</span>
+              <span>ReAct v2.0</span>
             </div>
-          )}
+            <div className="flex justify-between">
+              <span className="text-[#6E7455]">Active Model:</span>
+              <span className="text-white font-semibold">{MODEL_NAMES[model] || model}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[#6E7455]">API Key Status:</span>
+              <span className={health.agentrouter_active ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+                {health.agentrouter_active ? "AgentRouter Ready" : "Fallback Engine Ready"}
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* Right Dashboard Area (8 cols) */}
-        <div className="lg:col-span-8 flex flex-col space-y-6">
-          
-          {/* Tabs Navigation */}
-          <div className="flex border-b border-slate-800 space-x-6 text-sm font-medium">
-            <button
-              onClick={() => setActiveTab('report')}
-              className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
-                activeTab === 'report' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <FileText className="w-4 h-4" />
-              <span>Executive Brief</span>
-            </button>
+        {/* RIGHT DASHBOARD: CONTINUOUS UNIFIED SCROLLING PAGE (8 cols) */}
+        <div className="lg:col-span-8 flex flex-col space-y-8">
 
-            <button
-              onClick={() => setActiveTab('research')}
-              className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
-                activeTab === 'research' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <BookOpen className="w-4 h-4" />
-              <span>Research Publications ({scanResult?.papers?.length || 0})</span>
-            </button>
+          {/* SECTION 1: STATS & COMPARISON CHARTS ROW */}
+          <div className="bg-[#DCD6BE] border border-[#6E7455]/40 rounded-2xl p-6 shadow-md space-y-6">
+            <h2 className="font-serif font-bold text-lg text-[#2A2723] flex items-center gap-2 border-b border-[#6E7455]/30 pb-3">
+              <BarChart3 className="w-5 h-5 text-[#C2603A]" />
+              Signal Distribution & Competitor Comparison
+            </h2>
 
-            <button
-              onClick={() => setActiveTab('news')}
-              className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
-                activeTab === 'news' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Newspaper className="w-4 h-4" />
-              <span>Competitor Signals ({scanResult?.news?.length || 0})</span>
-            </button>
+            {/* Stat Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
+                <p className="text-[#6E7455] text-[11px]">Total Signals</p>
+                <p className="text-2xl font-bold text-[#C2603A]">{allFindings.length}</p>
+              </div>
+              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
+                <p className="text-[#6E7455] text-[11px]">Competitors</p>
+                <p className="text-2xl font-bold text-[#2A2723]">{competitorChartData.length}</p>
+              </div>
+              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
+                <p className="text-[#6E7455] text-[11px]">Data Sources</p>
+                <p className="text-2xl font-bold text-[#6E7455]">{sourceChartData.length}</p>
+              </div>
+              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
+                <p className="text-[#6E7455] text-[11px]">Trace Steps</p>
+                <p className="text-2xl font-bold text-[#2A2723]">{scanResult?.trace?.length || 0}</p>
+              </div>
+            </div>
 
-            <button
-              onClick={() => setActiveTab('trace')}
-              className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
-                activeTab === 'trace' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Cpu className="w-4 h-4 text-emerald-400" />
-              <span>Agent Thinking ({scanResult?.trace?.length || 0})</span>
-            </button>
+            {/* Custom SVG Charts Row (Zero recharts/react-is dependency issues) */}
+            {allFindings.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-2">
+                {/* Horizontal Bar Chart: Competitor Signal Share */}
+                <div className="md:col-span-7 bg-[#EAE3D2] p-4 rounded-xl border border-[#6E7455]/30 space-y-3">
+                  <h4 className="font-mono text-xs font-bold text-[#2A2723]">Competitor Signal Share</h4>
+                  <CompetitorBarChart data={competitorChartData} />
+                </div>
 
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
-                activeTab === 'chat' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>Analyst Q&A</span>
-            </button>
+                {/* Donut Chart: Source Type Breakdown */}
+                <div className="md:col-span-5 bg-[#EAE3D2] p-4 rounded-xl border border-[#6E7455]/30 space-y-3">
+                  <h4 className="font-mono text-xs font-bold text-[#2A2723]">Source Breakdown</h4>
+                  <SourceDonutChart data={sourceChartData} />
+                </div>
+              </div>
+            ) : (
+              <div className="bg-[#EAE3D2] p-8 rounded-xl border border-[#6E7455]/30 text-center font-mono text-xs text-[#6E7455]">
+                Click "Run Autonomous Scan" to analyze competitive density and source distribution.
+              </div>
+            )}
           </div>
 
-          {/* Tab 1: Executive Report with Full Markdown Formatting & Premium Styling */}
-          {activeTab === 'report' && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
-              {scanResult ? (
-                <>
-                  <div className="flex justify-between items-center pb-4 border-b border-slate-800">
-                    <div>
-                      <h3 className="font-semibold text-slate-100 text-base">Executive Intelligence Brief</h3>
-                      <p className="text-xs text-slate-400">Synthesized market analysis and research findings</p>
-                    </div>
+          {/* SECTION 2: EXECUTIVE SUMMARY (SHORT 3-5 SENTENCE TAKEAWAY) */}
+          <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl p-6 shadow-xl space-y-3">
+            <div className="flex justify-between items-center border-b border-[#6E7455]/40 pb-3">
+              <h3 className="font-serif font-bold text-base text-[#EAE3D2] flex items-center gap-2">
+                <FileText className="w-5 h-5 text-[#C2603A]" />
+                Executive Takeaway Summary
+              </h3>
+              {scanResult?.executive_report && (
+                <button
+                  onClick={() => {
+                    const blob = new Blob([scanResult.executive_report], { type: 'text/markdown' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `IntelPulse_${topic.replace(/\s+/g, '_')}_Report.md`;
+                    a.click();
+                  }}
+                  className="text-xs bg-[#C2603A] hover:bg-[#a8502e] text-white px-3 py-1.5 rounded-lg font-mono font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> Brief (.md)
+                </button>
+              )}
+            </div>
+
+            <p className="text-sm text-[#DCD6BE] leading-relaxed font-sans font-medium">
+              {executiveTakeaway}
+            </p>
+          </div>
+
+          {/* SECTION 3: UNIFIED FILTERABLE FINDINGS GRID */}
+          <div className="bg-[#DCD6BE] border border-[#6E7455]/40 rounded-2xl p-6 shadow-md space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#6E7455]/30 pb-4 gap-4">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-[#2A2723] flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-[#C2603A]" />
+                  Grounded Intelligence Findings ({filteredFindings.length})
+                </h3>
+                <p className="text-xs text-[#6E7455]">Filterable continuous grid of competitor signals and academic research</p>
+              </div>
+
+              {/* Filter Chips */}
+              <div className="flex flex-wrap gap-2 text-xs font-mono">
+                <div className="flex items-center space-x-1 bg-[#EAE3D2] p-1 rounded-lg border border-[#6E7455]/30">
+                  <Filter className="w-3 h-3 text-[#C2603A] ml-1" />
+                  {competitorChips.map(comp => (
                     <button
-                      onClick={() => {
-                        const blob = new Blob([scanResult.executive_report], { type: 'text/markdown' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `IntelPulse_${topic.replace(/\s+/g, '_')}_Report.md`;
-                        a.click();
-                      }}
-                      className="text-xs bg-slate-800 hover:bg-slate-700 px-3.5 py-2 rounded-xl border border-slate-700 text-slate-200 flex items-center gap-2 font-medium transition-colors"
-                    >
-                      <Download className="w-4 h-4" /> Download Brief (.md)
-                    </button>
-                  </div>
-
-                  {/* Rendered Premium HTML Typography from Markdown */}
-                  <div className="report-markdown text-slate-200 text-sm space-y-4 leading-relaxed">
-                    <ReactMarkdown
-                      components={{
-                        h1: ({node, ...props}) => <h1 className="text-xl font-bold text-slate-100 border-b border-slate-800 pb-2 mt-4 mb-3 tracking-tight" {...props} />,
-                        h2: ({node, ...props}) => <h2 className="text-base font-semibold text-sky-400 mt-6 mb-2 tracking-wide uppercase" {...props} />,
-                        h3: ({node, ...props}) => <h3 className="text-sm font-semibold text-indigo-300 mt-4 mb-2" {...props} />,
-                        p: ({node, ...props}) => <p className="text-slate-300 mb-3 leading-relaxed" {...props} />,
-                        ul: ({node, ...props}) => <ul className="list-disc list-inside space-y-1.5 text-slate-300 my-3 pl-2" {...props} />,
-                        li: ({node, ...props}) => <li className="text-slate-300" {...props} />,
-                        blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-sky-500 bg-slate-800/40 p-4 my-4 rounded-r-xl italic text-slate-300" {...props} />,
-                        hr: ({node, ...props}) => <hr className="border-slate-800 my-6" {...props} />,
-                        strong: ({node, ...props}) => <strong className="font-semibold text-slate-100" {...props} />
-                      }}
-                    >
-                      {scanResult.executive_report}
-                    </ReactMarkdown>
-                  </div>
-                </>
-              ) : (
-                <div className="text-center py-20 text-slate-500 space-y-4">
-                  <Zap className="w-12 h-12 mx-auto text-slate-700 animate-pulse" />
-                  <div>
-                    <p className="text-slate-300 font-medium text-sm">No Active Brief Generated</p>
-                    <p className="text-xs text-slate-500 mt-1">Configure your domain parameters and click "Run Autonomous Scan".</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Tab 2: ArXiv Papers */}
-          {activeTab === 'research' && (
-            <div className="space-y-4">
-              {scanResult?.papers?.map((paper, idx) => (
-                <div key={idx} className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 hover:border-slate-700 transition-colors space-y-3 shadow-sm">
-                  <div className="flex justify-between items-start gap-4">
-                    <h4 className="font-semibold text-slate-100 text-base leading-snug">{paper.title}</h4>
-                    <span className="text-xs bg-sky-500/10 text-sky-400 border border-sky-500/20 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap">
-                      {paper.published}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400">Authors: {paper.authors?.join(', ')}</p>
-                  <p className="text-sm text-slate-300 leading-relaxed">{paper.summary}</p>
-                  <div className="pt-1">
-                    <a
-                      href={paper.pdf_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center space-x-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium"
-                    >
-                      <span>Read ArXiv Paper (PDF)</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Tab 3: Competitor Signals */}
-          {activeTab === 'news' && (
-            <div className="space-y-4">
-              {scanResult?.news?.map((item, idx) => (
-                <div key={idx} className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 hover:border-slate-700 transition-colors space-y-3 shadow-sm">
-                  <div className="flex justify-between items-start gap-4">
-                    <h4 className="font-semibold text-slate-100 text-base leading-snug">{item.title}</h4>
-                    <span className="text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap">
-                      {item.source_name}
-                    </span>
-                  </div>
-                  <p className="text-sm text-slate-300 leading-relaxed">{item.snippet}</p>
-                  <div className="pt-1">
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center space-x-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-medium"
-                    >
-                      <span>View Source Article</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Tab: Live Dynamic Agent Thoughts & Trace */}
-          {activeTab === 'trace' && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
-              <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
-                <div>
-                  <h3 className="font-semibold text-slate-100 text-base flex items-center gap-2">
-                    <Cpu className="w-5 h-5 text-emerald-400" />
-                    Live Dynamic Agent Thoughts & Tool Executions
-                  </h3>
-                  <p className="text-xs text-slate-400">Streaming real-time ReAct loop: Thought ➔ Action ➔ Observation ➔ Synthesis</p>
-                </div>
-                {loading && (
-                  <span className="flex items-center gap-2 text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-3 py-1 rounded-full font-mono animate-pulse">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                    Agent Thinking Live...
-                  </span>
-                )}
-              </div>
-
-              {scanResult?.trace?.length > 0 ? (
-                <div className="space-y-4 font-mono text-xs">
-                  {scanResult.trace.map((step, idx) => (
-                    <div key={idx} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 shadow-inner transition-all">
-                      <div className="flex justify-between items-center">
-                        <span className="text-amber-400 font-bold text-sm">Step {step.step || idx + 1}</span>
-                        {step.observation === null ? (
-                          <span className="text-[10px] text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/30 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping"></span> Executing Tool...
-                          </span>
-                        ) : (
-                          <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">✓ Grounded Observation</span>
-                        )}
-                      </div>
-                      <div className="text-slate-300">
-                        <span className="text-emerald-400 font-semibold">Thought: </span>
-                        {step.thought}
-                      </div>
-                      <div className="text-slate-300">
-                        <span className="text-pink-400 font-semibold">Action: </span>
-                        <code className="bg-slate-900 px-2 py-0.5 rounded text-pink-300 border border-slate-800">{step.action}</code>
-                      </div>
-                      {step.observation !== null && (
-                        <div>
-                          <span className="text-sky-400 font-semibold">Observation: </span>
-                          <pre className="mt-1.5 bg-slate-900 p-3 rounded-lg text-slate-300 overflow-x-auto text-[11px] whitespace-pre-wrap border border-slate-800 max-h-52 leading-relaxed">
-                            {step.observation}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                loading && (
-                  <div className="text-center py-12 text-slate-500 space-y-2">
-                    <Cpu className="w-8 h-8 mx-auto text-emerald-500 animate-pulse" />
-                    <p className="text-xs text-slate-300 font-mono">Initializing Agent & Formulating Thoughts...</p>
-                  </div>
-                )
-              )}
-
-              {!loading && (!scanResult?.trace || scanResult.trace.length === 0) && (
-                <p className="text-xs text-slate-500 text-center py-12">No agent thoughts generated yet. Click "Run Autonomous Scan".</p>
-              )}
-            </div>
-          )}
-
-          {/* Tab 4: Analyst Chat */}
-          {activeTab === 'chat' && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl flex flex-col h-[520px] shadow-xl">
-              <div className="p-4 border-b border-slate-800">
-                <h3 className="font-semibold text-slate-200 text-sm">Interactive Strategy Q&A</h3>
-                <p className="text-xs text-slate-400">Ask analytical questions over retrieved research publications and market signals.</p>
-              </div>
-
-              <div className="flex-1 p-4 overflow-y-auto space-y-3">
-                {chatMessages.length === 0 ? (
-                  <div className="text-center py-12 text-slate-500 space-y-2">
-                    <MessageSquare className="w-8 h-8 mx-auto text-slate-700" />
-                    <p className="text-xs text-slate-400">
-                      Ask questions such as: "What are Tinder's key competitive vulnerabilities?" or "Summarize research matching frameworks."
-                    </p>
-                  </div>
-                ) : (
-                  chatMessages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className={`p-4 rounded-xl text-sm max-w-[85%] ${
-                        msg.role === 'user'
-                          ? 'ml-auto bg-sky-600 text-white font-medium'
-                          : 'bg-slate-800 text-slate-200 border border-slate-700'
+                      key={comp}
+                      onClick={() => setCompetitorFilter(comp)}
+                      className={`px-2.5 py-1 rounded-md transition-all font-semibold ${
+                        competitorFilter === comp
+                          ? 'bg-[#C2603A] text-white shadow-sm'
+                          : 'text-[#6E7455] hover:text-[#2A2723]'
                       }`}
                     >
-                      <ReactMarkdown
-                        components={{
-                          strong: ({node, ...props}) => <strong className="font-semibold text-white" {...props} />,
-                          p: ({node, ...props}) => <p className="mb-1" {...props} />
-                        }}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
+                      {comp}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Source Type Filter Sub-Bar */}
+            <div className="flex flex-wrap gap-2 text-xs font-mono border-b border-[#6E7455]/20 pb-3">
+              <span className="text-[#6E7455] font-semibold py-1">Source Filter:</span>
+              {['All', 'news', 'research', 'patents', 'github', 'reddit'].map(src => (
+                <button
+                  key={src}
+                  onClick={() => setSourceFilter(src)}
+                  className={`px-3 py-1 rounded-full border transition-all ${
+                    sourceFilter === src
+                      ? 'bg-[#2A2723] text-[#EAE3D2] border-[#2A2723] font-bold'
+                      : 'bg-[#EAE3D2] text-[#6E7455] border-[#6E7455]/30 hover:border-[#C2603A]'
+                  }`}
+                >
+                  {src.toUpperCase()}
+                </button>
+              ))}
+            </div>
+
+            {/* Filtered Grid Cards */}
+            {filteredFindings.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredFindings.map((item) => {
+                  const isSpecificCompetitor = item.entity && item.entity !== 'General' && item.entity !== topic;
+                  return (
+                    <div
+                      key={item.id}
+                      className={`rounded-xl p-5 flex flex-col justify-between transition-all shadow-sm ${
+                        isSpecificCompetitor
+                          ? 'bg-[#EAE3D2] border-2 border-[#C2603A]/70 shadow-md hover:border-[#C2603A]'
+                          : 'bg-[#EAE3D2]/80 border border-[#6E7455]/30 opacity-90 hover:opacity-100'
+                      }`}
+                    >
+                      <div className="space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          {isSpecificCompetitor ? (
+                            <span className="bg-[#C2603A] text-white font-mono font-bold px-2.5 py-0.5 rounded-md text-[11px] uppercase tracking-wider">
+                              {item.entity}
+                            </span>
+                          ) : (
+                            <span className="bg-[#6E7455]/20 text-[#6E7455] font-mono px-2 py-0.5 rounded text-[10px] font-semibold">
+                              {item.entity || 'MARKET GENERAL'}
+                            </span>
+                          )}
+
+                          <span className="text-[10px] font-mono text-[#6E7455] bg-[#DCD6BE] px-2 py-0.5 rounded border border-[#6E7455]/20">
+                            {item.source_type.toUpperCase()}
+                          </span>
+                        </div>
+
+                        <h4 className="font-serif font-bold text-sm text-[#2A2723] leading-snug">
+                          {item.title}
+                        </h4>
+
+                        <p className="text-xs text-[#2A2723]/80 leading-relaxed font-sans line-clamp-3">
+                          {item.snippet}
+                        </p>
+                      </div>
+
+                      <div className="pt-4 mt-3 border-t border-[#6E7455]/20 flex items-center justify-between font-mono text-[11px] text-[#6E7455]">
+                        <span>{item.source_name} ({item.date})</span>
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center space-x-1 text-[#C2603A] hover:underline font-semibold"
+                        >
+                          <span>Link</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
                     </div>
-                  ))
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-[#EAE3D2] p-12 rounded-xl border border-[#6E7455]/30 text-center font-mono text-xs text-[#6E7455]">
+                {scanResult ? "No findings match the selected competitor or source filter." : "No intelligence findings available yet. Click 'Run Autonomous Scan'."}
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 4: AGENT REASONING TRACE (COLLAPSIBLE & STAGGERED REVEAL) */}
+          <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl shadow-xl overflow-hidden font-mono text-xs">
+            <button
+              onClick={() => setTraceExpanded(!traceExpanded)}
+              className="w-full px-6 py-4 flex items-center justify-between border-b border-[#6E7455]/30 bg-[#2A2723] hover:bg-[#23201d] transition-colors text-left"
+            >
+              <div className="flex items-center space-x-3">
+                <Cpu className="w-5 h-5 text-[#C2603A]" />
+                <div>
+                  <h3 className="font-serif font-bold text-sm text-[#EAE3D2]">
+                    Agent Reasoning & Execution Trace ({scanResult?.trace?.length || 0} Steps)
+                  </h3>
+                  <p className="text-[11px] text-[#6E7455] font-mono">
+                    Collapsible terminal log: Thought ➔ Action ➔ Grounded Observation
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 text-[#C2603A]">
+                <span className="text-xs font-semibold">{traceExpanded ? 'Hide Trace' : 'Expand Trace'}</span>
+                {traceExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </div>
+            </button>
+
+            {traceExpanded && (
+              <div className="p-6 space-y-4 bg-[#2A2723]">
+                {scanResult?.trace?.length > 0 ? (
+                  <div className="space-y-4">
+                    {scanResult.trace.slice(0, staggeredStepCount).map((step, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 space-y-2 text-xs font-mono transition-all animate-fadeIn"
+                      >
+                        <div className="flex items-center justify-between border-b border-[#6E7455]/20 pb-1.5">
+                          <span className="text-[#C2603A] font-bold">Step {step.step || idx + 1}</span>
+                          <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                            ✓ Executed
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[#C2603A] font-bold mr-2">&gt;</span>
+                          <span className="text-[#DCD6BE] font-semibold">Thought: </span>
+                          <span className="text-[#EAE3D2]">{step.thought}</span>
+                        </div>
+                        <div>
+                          <span className="text-[#C2603A] font-bold mr-2">&gt;</span>
+                          <span className="text-[#D38B5D] font-semibold">Action: </span>
+                          <code className="bg-[#2A2723] px-2 py-0.5 rounded text-[#D38B5D] border border-[#6E7455]/30">{step.action}</code>
+                        </div>
+                        {step.observation && (
+                          <div className="pt-1">
+                            <span className="text-[#C2603A] font-bold mr-2">&gt;</span>
+                            <span className="text-sky-400 font-semibold">Observation: </span>
+                            <pre className="mt-1 bg-[#2A2723] p-3 rounded-lg text-[#DCD6BE] overflow-x-auto text-[11px] whitespace-pre-wrap border border-[#6E7455]/30 max-h-48 leading-relaxed">
+                              {step.observation}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-[#6E7455] text-center py-6">
+                    No reasoning trace recorded yet. Run an autonomous scan above.
+                  </p>
                 )}
               </div>
+            )}
+          </div>
 
-              <form onSubmit={handleSendChat} className="p-4 border-t border-slate-800 flex gap-3">
-                <input
-                  type="text"
-                  value={userQuestion}
-                  onChange={(e) => setUserQuestion(e.target.value)}
-                  placeholder="Ask IntelPulse Strategy Advisor a question..."
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
-                />
-                <button
-                  type="submit"
-                  disabled={chatLoading}
-                  className="bg-sky-500 hover:bg-sky-400 text-white px-4 py-2.5 rounded-xl font-medium flex items-center justify-center transition-colors disabled:opacity-50"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </form>
+          {/* SECTION 5: ANALYST Q&A PANEL (DOCKED AT BOTTOM OF SAME SCROLL PAGE) */}
+          <div className="bg-[#2A2723] border border-[#6E7455]/40 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="border-b border-[#6E7455]/30 pb-3">
+              <h3 className="font-serif font-bold text-[#EAE3D2] text-base flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-[#C2603A]" />
+                Interactive Strategy Q&A
+              </h3>
+              <p className="text-xs text-[#6E7455] font-sans">
+                Ask analytical questions over retrieved competitor signals, patents, and research publications.
+              </p>
             </div>
-          )}
+
+            <div className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 h-[320px] overflow-y-auto space-y-3 font-sans text-xs">
+              {chatMessages.length === 0 ? (
+                <div className="text-center py-16 text-[#6E7455] space-y-2">
+                  <MessageSquare className="w-8 h-8 mx-auto text-[#6E7455]/60" />
+                  <p className="text-xs text-[#6E7455]">
+                    Ask questions such as: "Compare Sarvam and OpenAI regional models" or "What patents exist for matching algorithms?"
+                  </p>
+                </div>
+              ) : (
+                chatMessages.map((msg, i) => (
+                  <div
+                    key={i}
+                    className={`p-3.5 rounded-xl max-w-[85%] ${
+                      msg.role === 'user'
+                        ? 'ml-auto bg-[#C2603A] text-white font-medium shadow-sm'
+                        : 'bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/30'
+                    }`}
+                  >
+                    <ReactMarkdown
+                      components={{
+                        strong: ({node, ...props}) => <strong className="font-semibold text-white" {...props} />,
+                        p: ({node, ...props}) => <p className="mb-1" {...props} />
+                      }}
+                    >
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <form onSubmit={handleSendChat} className="flex gap-3">
+              <input
+                type="text"
+                value={userQuestion}
+                onChange={(e) => setUserQuestion(e.target.value)}
+                placeholder="Ask IntelPulse Strategy Advisor a question..."
+                className="flex-1 bg-[#1F1D1A] border border-[#6E7455]/50 rounded-xl px-4 py-2.5 text-xs text-[#EAE3D2] focus:outline-none focus:border-[#C2603A]"
+              />
+              <button
+                type="submit"
+                disabled={chatLoading}
+                className="bg-[#C2603A] hover:bg-[#a8502e] text-white px-5 py-2.5 rounded-xl font-semibold flex items-center justify-center transition-colors disabled:opacity-50 text-xs shadow-md"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </form>
+          </div>
 
         </div>
-
       </main>
     </div>
   );

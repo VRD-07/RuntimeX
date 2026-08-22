@@ -11,6 +11,7 @@ from tools.research_tool import search_semantic_scholar
 from tools.patent_tool import search_patents
 from tools.competitor_tool import search_news
 from tools.github_tool import search_github
+from tools.reddit_tool import search_reddit
 
 load_dotenv()
 
@@ -61,11 +62,13 @@ class ScanResponse(BaseModel):
     status: str
     topic: str
     competitors: str
+    structured_output: Optional[Dict[str, Any]] = None
+    final_answer: str
+    executive_report: str
     papers: List[Dict[str, Any]]
     news: List[Dict[str, Any]]
     patents: Optional[List[Dict[str, Any]]] = []
     github_repos: Optional[List[Dict[str, Any]]] = []
-    executive_report: str
     trace: List[Dict[str, Any]]
     agentrouter_active: bool
 
@@ -123,7 +126,7 @@ def run_autonomous_scan(request: ScanRequest):
     """
     try:
         agent = AutonomousReActAgent(model=request.model)
-        result = agent.run_scan(topic=request.topic, competitors=request.competitors, max_items=request.max_items, max_steps=5)
+        result = agent.run_scan(topic=request.topic, competitors=request.competitors, max_items=request.max_items, max_steps=12)
         
         # Structure cards for Frontend Display
         papers_obs = search_semantic_scholar(f"{request.topic} recommendation matching algorithm", max_results=request.max_items)

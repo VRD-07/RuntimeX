@@ -7,12 +7,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        brand: {
-          50: '#f0f9ff',
-          500: '#0284c7',
-          600: '#0284c7',
-          700: '#0369a1',
-        }
+        beige: '#EAE3D2',
+        olive: '#6E7455',
+        terracotta: '#C2603A',
+        charcoal: '#2A2723',
+        'beige-card': '#DCD6BE',
+      },
+      fontFamily: {
+        fraunces: ['Fraunces', 'serif'],
+        serif: ['Fraunces', 'serif'],
+        sans: ['Inter', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'monospace'],
       }
     },
   },

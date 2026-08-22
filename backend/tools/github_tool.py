@@ -1,5 +1,6 @@
 import httpx
 import logging
+import urllib.parse
 from typing import List, Dict, Any
 
 logging.basicConfig(level=logging.INFO)
@@ -8,51 +9,57 @@ logger = logging.getLogger(__name__)
 def search_github(query: str, max_results: int = 5) -> str:
     """
     Finds active repositories on GitHub related to a technology or domain.
-    Filters out off-topic book/food recommendation systems.
+    Directly passes the exact input query parameter into the GitHub REST API request URL.
+    Logs exact query strings right before the API call to confirm dynamic execution.
     """
-    clean_query = query.replace("Competitors:", "").replace("Track", "").strip()
-    words = [w for w in clean_query.split() if w.lower() not in ["and", "for", "the", "in", "recent", "trends", "research", "patents", "news", "github"]]
-    target = " ".join(words[:2]) if words else "dating app"
-    
-    search_term = f"{target} matchmaker" if "dating" in target.lower() else f"{target} algorithm"
-    logger.info(f"--- [TOOL CALL] search_github(search_term='{search_term}') ---")
-    
+    clean_query = query.replace("Competitors:", "").replace("Track", "").replace("github", "").replace("repositories", "").strip()
+    if not clean_query:
+        clean_query = "multilingual language model"
+
+    # Encode query string cleanly for API request URL
+    encoded_query = urllib.parse.quote(clean_query)
+    url = f"https://api.github.com/search/repositories?q={encoded_query}&sort=stars&order=desc&per_page=10"
+
+    logger.info(f"--- [TOOL CALL] search_github(query='{clean_query}') ---")
+    logger.info(f"[GitHub API Call]: Executing search for query='{clean_query}', Request URL='{url}'")
+
     results = []
     headers = {
         "User-Agent": "IntelPulse-Autonomous-Agent/1.0",
         "Accept": "application/vnd.github.v3+json"
     }
-    
-    url = f"https://api.github.com/search/repositories?q={search_term}&sort=stars&order=desc&per_page=10"
-    
+
     try:
         with httpx.Client(timeout=15.0) as client:
             response = client.get(url, headers=headers)
+            logger.info(f"[GitHub Raw API Status]: HTTP {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
-                for item in data.get("items", []):
+                items = data.get("items", [])
+                logger.info(f"[GitHub Raw API Items Count]: {len(items)} items returned for query '{clean_query}'")
+                
+                for item in items:
                     desc = item.get("description", "") or ""
                     name = item.get("full_name", "")
                     
-                    # Filter out book/movie/food tinder clones
-                    if "books" in name.lower() or "books" in desc.lower() or "food" in name.lower() or "movies" in name.lower():
-                        continue
-                        
                     results.append({
                         "name": name,
-                        "description": desc[:200] if desc else "Dating match algorithm implementation",
+                        "description": desc[:200] if desc else "Repository description not provided",
                         "stars": item.get("stargazers_count", 0),
-                        "language": item.get("language", "Python"),
-                        "url": item.get("html_url"),
-                        "updated_at": item.get("updated_at", "")[:10]
+                        "language": item.get("language") or "Code",
+                        "url": item.get("html_url", "#"),
+                        "updated_at": item.get("updated_at", "")[:10] if item.get("updated_at") else "Recent"
                     })
                     if len(results) >= max_results:
                         break
+            else:
+                logger.warning(f"GitHub API returned HTTP {response.status_code}: {response.text[:200]}")
     except Exception as e:
-        logger.error(f"Error querying GitHub API: {e}")
+        logger.error(f"Error querying GitHub API for query '{clean_query}': {e}")
 
     if not results:
-        msg = f"No active open-source repositories found for query: '{search_term}'"
+        msg = f"No active open-source repositories found for query: '{clean_query}'"
         logger.info(f"[TOOL RAW RESULT]: {msg}")
         return f"[GitHub Observation]: {msg}"
 
@@ -64,6 +71,6 @@ def search_github(query: str, max_results: int = 5) -> str:
             f"  Last Updated: {r['updated_at']} | URL: {r['url']}"
         )
 
-    obs = f"[GitHub Observation per GitHub API]: Found {len(results)} active repositories for query '{search_term}':\n" + "\n".join(formatted_items)
+    obs = f"[GitHub Observation per GitHub API]: Found {len(results)} active repositories for query '{clean_query}':\n" + "\n".join(formatted_items)
     logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
     return obs
