@@ -15,7 +15,7 @@ class AgentRouterBrain:
     
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("AGENTROUTER_API_KEY", "")
-        self.base_url = (base_url or os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.ai/v1")).rstrip("/")
+        self.base_url = (base_url or os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1")).rstrip("/")
         self.model = model or os.getenv("AGENTROUTER_MODEL", "claude-3-5-sonnet")
 
     def _call_agentrouter_api(self, prompt: str, system_prompt: str = "") -> Optional[str]:

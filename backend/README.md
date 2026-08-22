@@ -16,7 +16,7 @@ pip install -r requirements.txt
 Create `.env` inside `backend/`:
 ```env
 AGENTROUTER_API_KEY=your_agentrouter_key_here
-AGENTROUTER_BASE_URL=https://agentrouter.ai/v1
+AGENTROUTER_BASE_URL=https://agentrouter.org/v1
 AGENTROUTER_MODEL=claude-3-5-sonnet
 ```
 

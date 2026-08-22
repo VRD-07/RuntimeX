@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 
 import AgentDebugView from './debug/AgentDebugView';
 import { checkHealth, runScan, runScanStream, sendChatMessage } from './api';
+
 import { 
   Zap, 
   Search, 
@@ -23,7 +24,9 @@ import {
   BarChart3,
   Layers,
   CheckCircle2,
-  PieChart as PieIcon
+  History,
+  Clock,
+  ArrowRight
 } from 'lucide-react';
 
 const MODEL_NAMES = {
@@ -36,7 +39,7 @@ const MODEL_NAMES = {
 
 const CHART_COLORS = ['#C2603A', '#6E7455', '#2A2723', '#8B9467', '#D38B5D'];
 
-// Custom Responsive Horizontal Bar Chart (Zero External Dependency)
+// Custom Responsive Horizontal Bar Chart
 function CompetitorBarChart({ data }) {
   const maxCount = Math.max(...data.map(d => d.count), 1);
 
@@ -66,7 +69,7 @@ function CompetitorBarChart({ data }) {
   );
 }
 
-// Custom Responsive Donut SVG Chart (Zero External Dependency)
+// Custom Responsive Donut SVG Chart
 function SourceDonutChart({ data }) {
   const total = data.reduce((acc, curr) => acc + curr.value, 0);
   if (total === 0) return <div className="text-[#6E7455] text-xs">No signals</div>;
@@ -125,12 +128,10 @@ function SourceDonutChart({ data }) {
 }
 
 export default function App() {
-  // Minimal Route Entry for Standalone Debug View (/debug/agent)
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/debug')) {
     return <AgentDebugView />;
   }
 
-  // State
   const [topic, setTopic] = useState('Regional language capabilities for AI');
   const [competitors, setCompetitors] = useState('Sarvam, OpenAI, Google');
   const [maxItems, setMaxItems] = useState(5);
@@ -145,7 +146,7 @@ export default function App() {
   const [sourceFilter, setSourceFilter] = useState('All');
 
   // Trace UI state
-  const [traceExpanded, setTraceExpanded] = useState(false);
+  const [traceExpanded, setTraceExpanded] = useState(true);
   const [staggeredStepCount, setStaggeredStepCount] = useState(0);
 
   // Chat state
@@ -153,7 +154,6 @@ export default function App() {
   const [userQuestion, setUserQuestion] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
 
-  // Check Backend Health on mount
   useEffect(() => {
     fetchHealth();
   }, []);
@@ -163,7 +163,6 @@ export default function App() {
     setHealth(data);
   };
 
-  // Stagger trace step reveal when trace is expanded or scan finishes
   useEffect(() => {
     if (scanResult?.trace?.length > 0) {
       setStaggeredStepCount(1);
@@ -182,7 +181,7 @@ export default function App() {
 
   const handleScan = async (e) => {
     if (e) e.preventDefault();
-    setScanResult(null); // Clear previous scan results
+    setScanResult(null);
     setLoading(true);
     setStaggeredStepCount(0);
 
@@ -190,9 +189,22 @@ export default function App() {
 
     try {
       await runScanStream(topic, competitors, maxItems, model, (chunk) => {
-        if (chunk.type === 'step_start') {
+        if (chunk.type === 'memory_recall') {
+          const memStep = {
+            step: 0,
+            agent_role: 'Orchestrator',
+            step_type: 'memory_recall',
+            thought: chunk.thought,
+            action: chunk.action,
+            content: chunk.content,
+            delta: chunk.delta
+          };
+          dynamicTrace = [memStep, ...dynamicTrace.filter(s => s.step !== 0)];
+          setScanResult({ trace: dynamicTrace });
+        } else if (chunk.type === 'step_start') {
           const newStep = {
             step: chunk.step,
+            agent_role: chunk.agent_role || 'Field Agent',
             thought: chunk.thought,
             action: chunk.action,
             observation: null
@@ -202,6 +214,7 @@ export default function App() {
         } else if (chunk.type === 'step_complete') {
           const updatedStep = {
             step: chunk.step,
+            agent_role: chunk.agent_role || 'Field Agent',
             thought: chunk.thought,
             action: chunk.action,
             observation: chunk.observation
@@ -229,15 +242,22 @@ export default function App() {
     if (!userQuestion.trim()) return;
 
     const newMsg = { role: 'user', content: userQuestion };
-    setChatMessages(prev => [...prev, newMsg]);
+    const updatedHistory = [...chatMessages, newMsg];
+    setChatMessages(updatedHistory);
     setUserQuestion('');
     setChatLoading(true);
 
     try {
       const contextResearch = scanResult?.papers || [];
       const contextCompetitors = scanResult?.news || [];
-      const res = await sendChatMessage(userQuestion, contextResearch, contextCompetitors, model);
-      setChatMessages(prev => [...prev, { role: 'assistant', content: res.answer }]);
+      const res = await sendChatMessage(userQuestion, updatedHistory, contextResearch, contextCompetitors, model);
+      
+      let answerWithBadge = res.answer;
+      if (res.tool_executed) {
+        answerWithBadge = `⚡ **[Live Field Agent Lookup Triggered]** Called \`${res.tool_executed.action}\`\n\n` + res.answer;
+      }
+
+      setChatMessages(prev => [...prev, { role: 'assistant', content: answerWithBadge, tool_executed: res.tool_executed }]);
     } catch (err) {
       setChatMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
     } finally {
@@ -245,13 +265,11 @@ export default function App() {
     }
   };
 
-  // Collect all items into one unified list for the findings grid
   const allFindings = React.useMemo(() => {
     if (!scanResult) return [];
 
     let items = [];
 
-    // Structured sections if available
     if (scanResult.structured_output?.sections) {
       scanResult.structured_output.sections.forEach(sec => {
         sec.items.forEach(it => {
@@ -268,7 +286,6 @@ export default function App() {
         });
       });
     } else {
-      // Fallback flat items
       if (scanResult.news) {
         scanResult.news.forEach(n => items.push({
           id: Math.random().toString(),
@@ -298,13 +315,11 @@ export default function App() {
     return items;
   }, [scanResult]);
 
-  // Unique list of competitors for filter chips
   const competitorChips = React.useMemo(() => {
     const list = competitors.split(',').map(c => c.trim()).filter(Boolean);
     return ['All', ...list];
   }, [competitors]);
 
-  // Filtered items based on filter chips
   const filteredFindings = React.useMemo(() => {
     return allFindings.filter(item => {
       const matchComp = competitorFilter === 'All' || item.entity.toLowerCase().includes(competitorFilter.toLowerCase());
@@ -313,7 +328,6 @@ export default function App() {
     });
   }, [allFindings, competitorFilter, sourceFilter]);
 
-  // Compute Chart Data: Count items per competitor
   const competitorChartData = React.useMemo(() => {
     const comps = competitors.split(',').map(c => c.trim()).filter(Boolean);
     return comps.map(c => {
@@ -322,7 +336,6 @@ export default function App() {
     });
   }, [allFindings, competitors]);
 
-  // Compute Chart Data: Count items per source type
   const sourceChartData = React.useMemo(() => {
     const sources = ['news', 'research', 'patents', 'github', 'reddit'];
     const labels = { news: 'News', research: 'Research', patents: 'Patents', github: 'GitHub', reddit: 'Reddit' };
@@ -332,7 +345,6 @@ export default function App() {
     }).filter(d => d.value > 0);
   }, [allFindings]);
 
-  // Executive Short Takeaway Summary (3-5 sentences max)
   const executiveTakeaway = React.useMemo(() => {
     if (!scanResult) return null;
     
@@ -350,28 +362,33 @@ export default function App() {
     return `Strategic intelligence scan for ${topic} across ${competitors}. Key technical developments and competitor signals have been parsed across academic research, market news, USPTO patent filings, and open-source repositories. Review specific entity signals below for actionable positioning.`;
   }, [scanResult, topic, competitors]);
 
+  const memoryRecallEvent = React.useMemo(() => {
+    if (!scanResult?.trace) return null;
+    return scanResult.trace.find(t => t.step_type === 'memory_recall' || t.step === 0);
+  }, [scanResult]);
+
   return (
-    <div className="min-h-screen bg-[#EAE3D2] text-[#2A2723] flex flex-col font-sans selection:bg-[#C2603A] selection:text-white">
+    <div className="min-h-screen bg-[#EAE3D2] text-[#2A2723] flex flex-col font-sans selection:bg-[#C2603A] selection:text-white relative overflow-x-hidden">
       
-      {/* 1. MASTHEAD HEADER */}
-      <header className="border-b border-[#6E7455]/30 bg-[#EAE3D2] sticky top-0 z-50 backdrop-blur-md">
+      {/* GLOBAL HEADER */}
+      <header className="border-b border-[#6E7455]/30 bg-[#EAE3D2]/90 sticky top-0 z-50 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3 cursor-pointer">
             <div className="p-2.5 bg-[#C2603A] text-white rounded-xl shadow-md">
               <Zap className="w-6 h-6" />
             </div>
             <div>
               <h1 className="font-serif font-bold text-xl text-[#2A2723] tracking-tight">IntelPulse ReAct Intelligence</h1>
-              <p className="text-xs text-[#6E7455] font-sans">Autonomous Research & Competitor Tracking Dashboard</p>
+              <p className="text-xs text-[#6E7455] font-sans">Multi-Agent Research & Memory Trace Platform</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
-            {/* Live Indicator Badge */}
-            <div className="flex items-center space-x-2 bg-[#DCD6BE] px-3.5 py-1.5 rounded-lg border border-[#6E7455]/40 text-xs font-mono">
+            {/* Live Indicator */}
+            <div className="hidden sm:flex items-center space-x-2 bg-[#DCD6BE] px-3.5 py-1.5 rounded-lg border border-[#6E7455]/40 text-xs font-mono">
               <span className="w-2.5 h-2.5 rounded-full bg-[#C2603A] animate-pulse"></span>
               <span className="text-[#2A2723] font-semibold">
-                {loading ? 'Agent Executing ReAct Scan...' : 'Agent Live'}
+                {loading ? 'ReAct Loop Active...' : 'System Live'}
               </span>
             </div>
 
@@ -382,7 +399,6 @@ export default function App() {
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 className="bg-transparent text-[#EAE3D2] text-xs font-mono font-medium focus:outline-none cursor-pointer"
-                title="Select active model"
               >
                 <option value="claude-3-5-sonnet" className="bg-[#2A2723] text-white">Claude 3.5 Sonnet</option>
                 <option value="claude-3-7-sonnet" className="bg-[#2A2723] text-white">Claude 3.7 Sonnet</option>
@@ -395,7 +411,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* SINGLE UNIFIED PAGE SCROLL LAYOUT */}
+      {/* DASHBOARD SINGLE SCROLL PAGE */}
       <main className="max-w-7xl mx-auto px-6 py-8 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* LEFT SIDEBAR: Market Parameters (4 cols) */}
@@ -408,7 +424,6 @@ export default function App() {
               </h2>
               <button 
                 onClick={fetchHealth} 
-                title="Refresh Backend Health"
                 className="p-1 hover:bg-[#EAE3D2] rounded-md transition-colors text-[#6E7455]"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -467,7 +482,7 @@ export default function App() {
                 {loading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                    <span>Agent ReAct Loop Executing...</span>
+                    <span>Multi-Agent Scan Executing...</span>
                   </>
                 ) : (
                   <>
@@ -479,11 +494,44 @@ export default function App() {
             </form>
           </div>
 
+          {/* VISIBLE MEMORY TRACE PANEL (PART C) */}
+          <div className="bg-[#DCD6BE] border-2 border-[#6E7455]/40 rounded-2xl p-5 shadow-md space-y-3 font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-[#6E7455]/30 pb-2">
+              <span className="font-serif font-bold text-[#2A2723] flex items-center gap-1.5">
+                <History className="w-4 h-4 text-[#C2603A]" />
+                Long-Term Memory Trace
+              </span>
+              <span className="bg-[#2A2723] text-[#EAE3D2] text-[10px] px-2 py-0.5 rounded font-bold">
+                SQLite Store
+              </span>
+            </div>
+
+            {memoryRecallEvent ? (
+              <div className="bg-[#EAE3D2] p-3 rounded-xl border border-[#6E7455]/30 space-y-2">
+                <div className="flex items-center space-x-1.5 text-[11px] font-bold text-[#C2603A]">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>[Memory Recall]</span>
+                </div>
+                <p className="text-[#2A2723] text-xs font-medium leading-relaxed">
+                  {memoryRecallEvent.content || "Loaded prior gap report for target competitor."}
+                </p>
+                <div className="pt-1 border-t border-[#6E7455]/20 text-[11px] text-[#6E7455] font-semibold">
+                  <span className="text-[#2A2723]">Delta: </span>
+                  {memoryRecallEvent.delta || "Baseline established."}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-[#EAE3D2] p-3 rounded-xl border border-[#6E7455]/30 text-[#6E7455] text-center text-[11px]">
+                No memory recall logged yet. Execute a scan to trigger SQLite cross-run persistence.
+              </div>
+            )}
+          </div>
+
           {/* QUICK ENGINE STATS PANEL */}
           <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl p-5 space-y-3 font-mono text-xs shadow-md">
             <div className="flex items-center justify-between border-b border-[#6E7455]/40 pb-2">
-              <span className="text-[#C2603A] font-bold">Engine Architecture</span>
-              <span>ReAct v2.0</span>
+              <span className="text-[#C2603A] font-bold">Architecture</span>
+              <span>Multi-Agent + Memory</span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#6E7455]">Active Model:</span>
@@ -492,13 +540,13 @@ export default function App() {
             <div className="flex justify-between">
               <span className="text-[#6E7455]">API Key Status:</span>
               <span className={health.agentrouter_active ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
-                {health.agentrouter_active ? "AgentRouter Ready" : "Fallback Engine Ready"}
+                {health.agentrouter_active ? "Gemini 2.5 Active" : "Fallback Engine Active"}
               </span>
             </div>
           </div>
         </div>
 
-        {/* RIGHT DASHBOARD: CONTINUOUS UNIFIED SCROLLING PAGE (8 cols) */}
+        {/* RIGHT DASHBOARD PAGE (8 cols) */}
         <div className="lg:col-span-8 flex flex-col space-y-8">
 
           {/* SECTION 1: STATS & COMPARISON CHARTS ROW */}
@@ -528,16 +576,14 @@ export default function App() {
               </div>
             </div>
 
-            {/* Custom SVG Charts Row (Zero recharts/react-is dependency issues) */}
+            {/* Custom SVG Charts Row */}
             {allFindings.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-2">
-                {/* Horizontal Bar Chart: Competitor Signal Share */}
                 <div className="md:col-span-7 bg-[#EAE3D2] p-4 rounded-xl border border-[#6E7455]/30 space-y-3">
                   <h4 className="font-mono text-xs font-bold text-[#2A2723]">Competitor Signal Share</h4>
                   <CompetitorBarChart data={competitorChartData} />
                 </div>
 
-                {/* Donut Chart: Source Type Breakdown */}
                 <div className="md:col-span-5 bg-[#EAE3D2] p-4 rounded-xl border border-[#6E7455]/30 space-y-3">
                   <h4 className="font-mono text-xs font-bold text-[#2A2723]">Source Breakdown</h4>
                   <SourceDonutChart data={sourceChartData} />
@@ -550,7 +596,7 @@ export default function App() {
             )}
           </div>
 
-          {/* SECTION 2: EXECUTIVE SUMMARY (SHORT 3-5 SENTENCE TAKEAWAY) */}
+          {/* SECTION 2: EXECUTIVE SUMMARY */}
           <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl p-6 shadow-xl space-y-3">
             <div className="flex justify-between items-center border-b border-[#6E7455]/40 pb-3">
               <h3 className="font-serif font-bold text-base text-[#EAE3D2] flex items-center gap-2">
@@ -692,7 +738,7 @@ export default function App() {
             )}
           </div>
 
-          {/* SECTION 4: AGENT REASONING TRACE (COLLAPSIBLE & STAGGERED REVEAL) */}
+          {/* SECTION 4: AGENT REASONING TRACE */}
           <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl shadow-xl overflow-hidden font-mono text-xs">
             <button
               onClick={() => setTraceExpanded(!traceExpanded)}
@@ -702,10 +748,10 @@ export default function App() {
                 <Cpu className="w-5 h-5 text-[#C2603A]" />
                 <div>
                   <h3 className="font-serif font-bold text-sm text-[#EAE3D2]">
-                    Agent Reasoning & Execution Trace ({scanResult?.trace?.length || 0} Steps)
+                    Multi-Agent Reasoning & Execution Trace ({scanResult?.trace?.length || 0} Steps)
                   </h3>
                   <p className="text-[11px] text-[#6E7455] font-mono">
-                    Collapsible terminal log: Thought ➔ Action ➔ Grounded Observation
+                    Field Agent ➔ Orchestrator ➔ Analyst Agent Execution Log
                   </p>
                 </div>
               </div>
@@ -722,10 +768,25 @@ export default function App() {
                     {scanResult.trace.slice(0, staggeredStepCount).map((step, idx) => (
                       <div
                         key={idx}
-                        className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 space-y-2 text-xs font-mono transition-all animate-fadeIn"
+                        className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 space-y-2 text-xs font-mono transition-all"
                       >
                         <div className="flex items-center justify-between border-b border-[#6E7455]/20 pb-1.5">
-                          <span className="text-[#C2603A] font-bold">Step {step.step || idx + 1}</span>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[#C2603A] font-bold">Step {step.step || idx + 1}</span>
+                            {step.step_type === 'memory_recall' ? (
+                              <span className="bg-amber-600 text-white px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider flex items-center gap-1">
+                                <History className="w-3 h-3" /> MEMORY RECALL
+                              </span>
+                            ) : step.agent_role === 'Analyst Agent' ? (
+                              <span className="bg-[#6E7455] text-white px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider">
+                                ANALYST AGENT
+                              </span>
+                            ) : (
+                              <span className="bg-[#C2603A] text-white px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider">
+                                FIELD AGENT
+                              </span>
+                            )}
+                          </div>
                           <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                             ✓ Executed
                           </span>
@@ -749,6 +810,12 @@ export default function App() {
                             </pre>
                           </div>
                         )}
+                        {step.content && (
+                          <div className="pt-1">
+                            <span className="text-amber-400 font-semibold">Recall Detail: </span>
+                            <span className="text-[#EAE3D2]">{step.content}</span>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -761,24 +828,29 @@ export default function App() {
             )}
           </div>
 
-          {/* SECTION 5: ANALYST Q&A PANEL (DOCKED AT BOTTOM OF SAME SCROLL PAGE) */}
+          {/* SECTION 5: ANALYST Q&A PANEL WITH MULTI-TURN MEMORY & LIVE TOOL BADGES */}
           <div className="bg-[#2A2723] border border-[#6E7455]/40 rounded-2xl p-6 shadow-xl space-y-4">
-            <div className="border-b border-[#6E7455]/30 pb-3">
-              <h3 className="font-serif font-bold text-[#EAE3D2] text-base flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-[#C2603A]" />
-                Interactive Strategy Q&A
-              </h3>
-              <p className="text-xs text-[#6E7455] font-sans">
-                Ask analytical questions over retrieved competitor signals, patents, and research publications.
-              </p>
+            <div className="border-b border-[#6E7455]/30 pb-3 flex justify-between items-center">
+              <div>
+                <h3 className="font-serif font-bold text-[#EAE3D2] text-base flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-[#C2603A]" />
+                  Interactive Strategy Q&A
+                </h3>
+                <p className="text-xs text-[#6E7455] font-sans">
+                  Stateful multi-turn conversation over retrieved signals. Mentions of 'patents', 'news', or 'github' trigger real-time Field Agent lookups.
+                </p>
+              </div>
+              <span className="bg-[#6E7455]/20 text-[#DCD6BE] text-[10px] font-mono px-2.5 py-1 rounded border border-[#6E7455]/30">
+                Multi-Turn Active
+              </span>
             </div>
 
-            <div className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 h-[320px] overflow-y-auto space-y-3 font-sans text-xs">
+            <div className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 h-[340px] overflow-y-auto space-y-3 font-sans text-xs">
               {chatMessages.length === 0 ? (
                 <div className="text-center py-16 text-[#6E7455] space-y-2">
                   <MessageSquare className="w-8 h-8 mx-auto text-[#6E7455]/60" />
                   <p className="text-xs text-[#6E7455]">
-                    Ask questions such as: "Compare Sarvam and OpenAI regional models" or "What patents exist for matching algorithms?"
+                    Ask follow-up questions such as: "Now compare that to Sarvam" or "Deep dive into their patent filings."
                   </p>
                 </div>
               ) : (
@@ -788,9 +860,15 @@ export default function App() {
                     className={`p-3.5 rounded-xl max-w-[85%] ${
                       msg.role === 'user'
                         ? 'ml-auto bg-[#C2603A] text-white font-medium shadow-sm'
-                        : 'bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/30'
+                        : 'bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/30 space-y-2'
                     }`}
                   >
+                    {msg.tool_executed && (
+                      <div className="inline-flex items-center space-x-1.5 bg-[#C2603A]/20 border border-[#C2603A]/50 text-[#C2603A] px-2 py-0.5 rounded text-[10px] font-mono font-bold">
+                        <Zap className="w-3 h-3" />
+                        <span>Live Field Lookup: {msg.tool_executed.action}</span>
+                      </div>
+                    )}
                     <ReactMarkdown
                       components={{
                         strong: ({node, ...props}) => <strong className="font-semibold text-white" {...props} />,
@@ -809,7 +887,7 @@ export default function App() {
                 type="text"
                 value={userQuestion}
                 onChange={(e) => setUserQuestion(e.target.value)}
-                placeholder="Ask IntelPulse Strategy Advisor a question..."
+                placeholder="Ask follow-up question (e.g. 'deep dive into their patent filings')..."
                 className="flex-1 bg-[#1F1D1A] border border-[#6E7455]/50 rounded-xl px-4 py-2.5 text-xs text-[#EAE3D2] focus:outline-none focus:border-[#C2603A]"
               />
               <button

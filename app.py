@@ -69,7 +69,7 @@ if "chat_history" not in st.session_state:
 
 # Load environment variables securely
 env_api_key = os.getenv("AGENTROUTER_API_KEY", "")
-env_base_url = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.ai/v1")
+env_base_url = os.getenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1")
 env_model = os.getenv("AGENTROUTER_MODEL", "claude-3-5-sonnet")
 
 # Sidebar Controls
