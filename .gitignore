@@ -21,6 +21,10 @@ build
 *.sqlite
 *.sqlite3
 
+# Server logs. These capture the exact queries a scan ran, so they are local
+# diagnostics rather than source, and they should never reach the repository.
+*.log
+
 # Virtualenv
 venv/
 env/

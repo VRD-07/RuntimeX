@@ -91,7 +91,7 @@ export async function runScan(topic, competitors, maxItems = 5, model = DEFAULT_
 /**
  * Sends an analyst follow-up question.
  * `context` carries the findings currently displayed so the answer stays grounded in them:
- *   { research: [], competitors: [], patents: [], github: [], reddit: [] }
+ *   { research: [], competitors: [], patents: [], github: [], reddit: [], models: [], hackernews: [] }
  */
 export async function sendChatMessage(question, chatHistory = [], context = {}, model = DEFAULT_MODEL) {
   const res = await fetch(`${API_BASE_URL}/api/chat`, {
@@ -105,6 +105,8 @@ export async function sendChatMessage(question, chatHistory = [], context = {}, 
       context_patents: context.patents || [],
       context_github: context.github || [],
       context_reddit: context.reddit || [],
+      context_models: context.models || [],
+      context_hackernews: context.hackernews || [],
       model
     })
   });

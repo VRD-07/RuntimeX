@@ -8,6 +8,8 @@ from tools.patent_tool import search_patents
 from tools.competitor_tool import search_news
 from tools.github_tool import search_github
 from tools.reddit_tool import search_reddit
+from tools.hf_tool import search_huggingface_models
+from tools.hn_tool import search_hackernews
 from memory_db import init_memory_db, get_prior_scan_memory, save_scan_memory, compute_memory_delta
 
 logger = logging.getLogger(__name__)
@@ -39,8 +41,25 @@ SUPPORTED_GEMINI_MODELS = {
     "gemini-1.5-flash",
     "gemini-1.5-pro",
 }
-# Section order also defines the source_type buckets exposed to the frontend
-SECTION_ORDER = ["news", "research", "patents", "github", "reddit"]
+# Section order also defines the source_type buckets exposed to the frontend.
+# Adding a source_type here is not sufficient on its own — it must also be added
+# to SECTION_RESPONSE_KEYS below, to the /api/scan response model, to the chat
+# context payload, and to the frontend's source filter.
+SECTION_ORDER = ["news", "research", "patents", "github", "reddit", "models", "hackernews"]
+
+# Maps each section bucket to its flat top-level key in the scan response. The
+# flat arrays are a legacy contract older frontend builds still read, and every
+# one of them has to be derived from this map so a new source cannot be silently
+# dropped from the response the way reddit_posts once was.
+SECTION_RESPONSE_KEYS = {
+    "research": "papers",
+    "news": "news",
+    "patents": "patents",
+    "github": "github_repos",
+    "reddit": "reddit_posts",
+    "models": "hf_models",
+    "hackernews": "hn_posts",
+}
 # A competitor with fewer than this many grounded items is reported as a coverage gap
 GAP_THRESHOLD = 2
 
@@ -126,7 +145,7 @@ def call_gemini(prompt_content: str, system_instruction: str, model_name: str,
     return None
 
 
-FIELD_AGENT_PROMPT = """You are the Field Research Agent. Your only job is to gather grounded observations using tools (news, semantic scholar, patents, github, reddit). Do NOT synthesize, summarize, or draw conclusions — only collect and return raw, cited observations.
+FIELD_AGENT_PROMPT = """You are the Field Research Agent. Your only job is to gather grounded observations using tools (news, semantic scholar, patents, github, reddit, hugging face models, hacker news). Do NOT synthesize, summarize, or draw conclusions — only collect and return raw, cited observations.
 
 REASONING FORMAT:
 Thought: explain what raw data you need to collect.
@@ -149,7 +168,9 @@ TOOL_REGISTRY = {
     "search_patents": search_patents,
     "search_news": search_news,
     "search_github": search_github,
-    "search_reddit": search_reddit
+    "search_reddit": search_reddit,
+    "search_huggingface_models": search_huggingface_models,
+    "search_hackernews": search_hackernews,
 }
 
 
@@ -225,7 +246,8 @@ def compute_gap_report(sections: List[Dict[str, Any]], comp_list: List[str]) -> 
 class FieldAgent:
     """
     Field Research Agent.
-    Executes raw tool calls (news, research, patents, github, reddit) and returns grounded observations.
+    Executes raw tool calls (news, research, patents, github, reddit, model hub, hacker news)
+    and returns grounded observations.
     Does NOT synthesize summaries or conclusions.
     """
     def __init__(self, model: Optional[str] = None):
@@ -238,12 +260,16 @@ class FieldAgent:
         Returns the action, the raw observation text, and the structured items behind it.
         """
         q_lower = question.lower()
-        if "patent" in q_lower:
+        if "patent" in q_lower or "ip" in q_lower.split() or "filing" in q_lower:
             tool_name, result = "search_patents", search_patents(question, max_results=max_items)
         elif "news" in q_lower or "funding" in q_lower or "announce" in q_lower:
             tool_name, result = "search_news", search_news(question, max_results=max_items)
+        elif any(kw in q_lower for kw in ("model", "download", "huggingface", "hugging face", "weights", "adoption")):
+            tool_name, result = "search_huggingface_models", search_huggingface_models(question, max_results=max_items)
         elif "github" in q_lower or "code" in q_lower or "repo" in q_lower:
             tool_name, result = "search_github", search_github(question, max_results=max_items)
+        elif "hacker news" in q_lower or "hackernews" in q_lower or " hn " in f" {q_lower} ":
+            tool_name, result = "search_hackernews", search_hackernews(question, max_results=max_items)
         elif "reddit" in q_lower or "sentiment" in q_lower or "user" in q_lower:
             tool_name, result = "search_reddit", search_reddit(question, max_results=max_items)
         else:
@@ -322,6 +348,11 @@ class FieldAgent:
             return
 
         # STANDARD INITIAL FIELD SCAN
+        #
+        # Ordering matters because max_steps can truncate this sequence: the
+        # topic-level single calls run before the per-competitor fan-outs so a
+        # tight step budget loses depth on individual competitors rather than
+        # losing an entire source category.
 
         # 1. News per competitor
         for comp in comp_list:
@@ -334,27 +365,17 @@ class FieldAgent:
             )
             step += 1
 
-        # 2. Academic papers
-        if out_of_budget():
-            return
-        yield from self._run_tool(
-            search_semantic_scholar, clean_topic,
-            f"Field Agent collecting academic literature for '{clean_topic}'.",
-            step, max_items
-        )
-        step += 1
-
-        # 3. Patent filings
+        # 2. Patent filings (India-first jurisdiction preference)
         if out_of_budget():
             return
         yield from self._run_tool(
             search_patents, clean_topic,
-            f"Field Agent querying patent filings for '{clean_topic}'.",
+            f"Field Agent querying patent filings for '{clean_topic}', preferring Indian jurisdictions.",
             step, max_items
         )
         step += 1
 
-        # 4. GitHub open source repos
+        # 3. GitHub open source repos
         if out_of_budget():
             return
         yield from self._run_tool(
@@ -364,13 +385,45 @@ class FieldAgent:
         )
         step += 1
 
-        # 5. Reddit community sentiment per competitor
+        # 4. Academic papers
+        if out_of_budget():
+            return
+        yield from self._run_tool(
+            search_semantic_scholar, clean_topic,
+            f"Field Agent collecting academic literature for '{clean_topic}'.",
+            step, max_items
+        )
+        step += 1
+
+        # 5. Published model traction per competitor
+        for comp in comp_list:
+            if out_of_budget():
+                return
+            yield from self._run_tool(
+                search_huggingface_models, comp,
+                f"Field Agent measuring published model adoption for competitor '{comp}'.",
+                step, max_items, entity=comp
+            )
+            step += 1
+
+        # 6. Reddit community sentiment per competitor
         for comp in comp_list:
             if out_of_budget():
                 return
             yield from self._run_tool(
                 search_reddit, f"{comp} user feedback".strip(),
                 f"Field Agent parsing Reddit discussions for competitor '{comp}'.",
+                step, max_items, entity=comp
+            )
+            step += 1
+
+        # 7. Hacker News engagement per competitor
+        for comp in comp_list:
+            if out_of_budget():
+                return
+            yield from self._run_tool(
+                search_hackernews, comp,
+                f"Field Agent measuring Hacker News engagement for competitor '{comp}'.",
                 step, max_items, entity=comp
             )
             step += 1
@@ -527,7 +580,7 @@ class OrchestratorAgent:
         self.field_agent = FieldAgent(model)
         self.analyst_agent = AnalystAgent(model)
 
-    def stream_orchestration(self, topic: str, competitors: str, max_items: int = 5, max_steps: int = 12) -> Generator[str, None, None]:
+    def stream_orchestration(self, topic: str, competitors: str, max_items: int = 5, max_steps: int = 18) -> Generator[str, None, None]:
         comp_list = [c.strip() for c in competitors.split(",") if c.strip()]
         primary_comp = comp_list[0] if comp_list else topic
 
@@ -663,7 +716,7 @@ class OrchestratorAgent:
         }
         by_type = {s["source_type"]: s["items"] for s in sections}
 
-        yield json.dumps({
+        final_event = {
             "type": "final_complete",
             "status": "success",
             "topic": topic,
@@ -676,14 +729,15 @@ class OrchestratorAgent:
                 "content": mem_content,
                 "delta": mem_delta
             },
-            "papers": by_type.get("research", []),
-            "news": by_type.get("news", []),
-            "patents": by_type.get("patents", []),
-            "github_repos": by_type.get("github", []),
-            "reddit_posts": by_type.get("reddit", []),
             "model_used": self.analyst_agent.model_name if self.analyst_agent.llm_enabled else "rule-based-fallback",
             "llm_active": self.analyst_agent.llm_enabled
-        }) + "\n"
+        }
+        # Derived from the map rather than written out by hand: a source added to
+        # SECTION_ORDER without a flat array here used to vanish from the response.
+        for source_type, response_key in SECTION_RESPONSE_KEYS.items():
+            final_event[response_key] = by_type.get(source_type, [])
+
+        yield json.dumps(final_event) + "\n"
 
 
 class AutonomousReActAgent:
@@ -694,10 +748,10 @@ class AutonomousReActAgent:
         self.orchestrator = OrchestratorAgent(model)
         self.field_agent = FieldAgent(model)
 
-    def stream_scan(self, topic: str = "Regional language capabilities for AI", competitors: str = "Sarvam, OpenAI, Google", max_items: int = 5, max_steps: int = 12) -> Generator[str, None, None]:
+    def stream_scan(self, topic: str = "Regional language capabilities for AI", competitors: str = "Sarvam, OpenAI, Google", max_items: int = 5, max_steps: int = 18) -> Generator[str, None, None]:
         return self.orchestrator.stream_orchestration(topic, competitors, max_items, max_steps)
 
-    def run_scan(self, topic: str = "Regional language capabilities for AI", competitors: str = "Sarvam, OpenAI, Google", max_items: int = 5, max_steps: int = 12) -> Dict[str, Any]:
+    def run_scan(self, topic: str = "Regional language capabilities for AI", competitors: str = "Sarvam, OpenAI, Google", max_items: int = 5, max_steps: int = 18) -> Dict[str, Any]:
         stream_results = list(self.stream_scan(topic, competitors, max_items, max_steps))
         if not stream_results:
             raise RuntimeError("Scan produced no output.")
@@ -732,7 +786,7 @@ class AutonomousReActAgent:
                     "delta": memory_delta or data["delta"]
                 })
 
-        return {
+        scan_result = {
             "status": "success",
             "topic": final["topic"],
             "competitors": final["competitors"],
@@ -741,12 +795,12 @@ class AutonomousReActAgent:
             "executive_report": final["executive_report"],
             "gap_report": final.get("gap_report", []),
             "memory_recall": final.get("memory_recall", {}),
-            "papers": final["papers"],
-            "news": final["news"],
-            "patents": final.get("patents", []),
-            "github_repos": final.get("github_repos", []),
-            "reddit_posts": final.get("reddit_posts", []),
             "trace": trace,
             "llm_active": final.get("llm_active", False),
             "model_used": final.get("model_used", "")
         }
+        # Same map as the streaming path, for the same reason.
+        for response_key in SECTION_RESPONSE_KEYS.values():
+            scan_result[response_key] = final.get(response_key, [])
+
+        return scan_result

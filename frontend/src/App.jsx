@@ -43,6 +43,33 @@ const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 const CHART_COLORS = ['#C2603A', '#6E7455', '#2A2723', '#8B9467', '#D38B5D'];
 
+// Must mirror SECTION_ORDER / SECTION_RESPONSE_KEYS in backend/agent_brain.py.
+// Declared once here so the source filter, the source chart and the chat context
+// payload all stay in step — they used to be three separate hardcoded lists.
+const SOURCE_TYPES = ['news', 'research', 'patents', 'github', 'reddit', 'models', 'hackernews'];
+
+const SOURCE_LABELS = {
+  news: 'News',
+  research: 'Research',
+  patents: 'Patents',
+  github: 'GitHub',
+  reddit: 'Reddit',
+  models: 'Model Hub',
+  hackernews: 'Hacker News'
+};
+
+// Flat top-level arrays in the scan response, read only when structured_output
+// is missing (older backend builds).
+const SOURCE_RESPONSE_KEYS = {
+  news: 'news',
+  research: 'papers',
+  patents: 'patents',
+  github: 'github_repos',
+  reddit: 'reddit_posts',
+  models: 'hf_models',
+  hackernews: 'hn_posts'
+};
+
 // Custom Responsive Horizontal Bar Chart
 function CompetitorBarChart({ data }) {
   const maxCount = Math.max(...data.map(d => d.count), 1);
@@ -269,8 +296,7 @@ export default function App() {
       const sectionItems = (type) => {
         const fromSections = scanResult?.structured_output?.sections?.find(s => s.source_type === type)?.items;
         if (fromSections) return fromSections;
-        const legacyKey = { news: 'news', research: 'papers', patents: 'patents', github: 'github_repos', reddit: 'reddit_posts' }[type];
-        return scanResult?.[legacyKey] || [];
+        return scanResult?.[SOURCE_RESPONSE_KEYS[type]] || [];
       };
 
       const res = await sendChatMessage(userQuestion, updatedHistory, {
@@ -278,7 +304,9 @@ export default function App() {
         competitors: sectionItems('news'),
         patents: sectionItems('patents'),
         github: sectionItems('github'),
-        reddit: sectionItems('reddit')
+        reddit: sectionItems('reddit'),
+        models: sectionItems('models'),
+        hackernews: sectionItems('hackernews')
       }, model);
       
       let answerWithBadge = res.answer;
@@ -366,11 +394,9 @@ export default function App() {
   }, [allFindings, competitors]);
 
   const sourceChartData = React.useMemo(() => {
-    const sources = ['news', 'research', 'patents', 'github', 'reddit'];
-    const labels = { news: 'News', research: 'Research', patents: 'Patents', github: 'GitHub', reddit: 'Reddit' };
-    return sources.map(s => {
+    return SOURCE_TYPES.map(s => {
       const count = allFindings.filter(it => it.source_type.toLowerCase() === s).length;
-      return { name: labels[s], value: count };
+      return { name: SOURCE_LABELS[s], value: count };
     }).filter(d => d.value > 0);
   }, [allFindings]);
 
@@ -388,7 +414,7 @@ export default function App() {
       }
     }
 
-    return `Strategic intelligence scan for ${topic} across ${competitors}. Key technical developments and competitor signals have been parsed across academic research, market news, USPTO patent filings, and open-source repositories. Review specific entity signals below for actionable positioning.`;
+    return `Strategic intelligence scan for ${topic} across ${competitors}. Key technical developments and competitor signals have been parsed across academic research, market news, patent filings, published model adoption, and open-source repositories. Review specific entity signals below for actionable positioning.`;
   }, [scanResult, topic, competitors]);
 
   const memoryRecallEvent = React.useMemo(() => {
@@ -704,7 +730,7 @@ export default function App() {
             {/* Source Type Filter Sub-Bar */}
             <div className="flex flex-wrap gap-2 text-xs font-mono border-b border-[#6E7455]/20 pb-3">
               <span className="text-[#6E7455] font-semibold py-1">Source Filter:</span>
-              {['All', 'news', 'research', 'patents', 'github', 'reddit'].map(src => (
+              {['All', ...SOURCE_TYPES].map(src => (
                 <button
                   key={src}
                   onClick={() => setSourceFilter(src)}
@@ -714,7 +740,7 @@ export default function App() {
                       : 'bg-[#EAE3D2] text-[#6E7455] border-[#6E7455]/30 hover:border-[#C2603A]'
                   }`}
                 >
-                  {src.toUpperCase()}
+                  {(SOURCE_LABELS[src] || src).toUpperCase()}
                 </button>
               ))}
             </div>
@@ -746,7 +772,7 @@ export default function App() {
                           )}
 
                           <span className="text-[10px] font-mono text-[#6E7455] bg-[#DCD6BE] px-2 py-0.5 rounded border border-[#6E7455]/20">
-                            {item.source_type.toUpperCase()}
+                            {(SOURCE_LABELS[item.source_type] || item.source_type).toUpperCase()}
                           </span>
                         </div>
 

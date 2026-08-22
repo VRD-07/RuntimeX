@@ -89,7 +89,10 @@ class ScanRequest(BaseModel):
     topic: str = Field(default="Regional language capabilities for AI", description="Research topic or domain to scan")
     competitors: str = Field(default="Sarvam, OpenAI, Google", description="Comma-separated competitor names or keywords")
     max_items: int = Field(default=5, ge=1, le=10, description="Items to fetch per source")
-    max_steps: int = Field(default=12, ge=1, le=24, description="Maximum number of grounded tool calls per scan")
+    # The initial scan issues 4 calls per competitor (news, model hub, reddit,
+    # hacker news) plus 3 topic-level calls, so the default has to clear
+    # 4*N + 3 or the later sources get truncated away.
+    max_steps: int = Field(default=18, ge=1, le=30, description="Maximum number of grounded tool calls per scan")
     model: Optional[str] = Field(default=DEFAULT_GEMINI_MODEL, description="Gemini model id used for synthesis")
 
 
@@ -106,6 +109,8 @@ class ScanResponse(BaseModel):
     patents: List[Dict[str, Any]] = []
     github_repos: List[Dict[str, Any]] = []
     reddit_posts: List[Dict[str, Any]] = []
+    hf_models: List[Dict[str, Any]] = []
+    hn_posts: List[Dict[str, Any]] = []
     trace: List[Dict[str, Any]] = []
     memory_recall: Optional[Dict[str, Any]] = None
     llm_active: bool
@@ -125,6 +130,8 @@ class ChatRequest(BaseModel):
     context_patents: List[Dict[str, Any]] = []
     context_github: List[Dict[str, Any]] = []
     context_reddit: List[Dict[str, Any]] = []
+    context_models: List[Dict[str, Any]] = []
+    context_hackernews: List[Dict[str, Any]] = []
     model: Optional[str] = DEFAULT_GEMINI_MODEL
 
 
@@ -210,6 +217,8 @@ def run_autonomous_scan(request: ScanRequest):
             patents=result.get("patents", []),
             github_repos=result.get("github_repos", []),
             reddit_posts=result.get("reddit_posts", []),
+            hf_models=result.get("hf_models", []),
+            hn_posts=result.get("hn_posts", []),
             trace=result.get("trace", []),
             memory_recall=result.get("memory_recall"),
             llm_active=result.get("llm_active", False),
@@ -233,7 +242,11 @@ def analyst_chat(request: ChatRequest):
         tool_res = None
 
         q_lower = request.question.lower()
-        trigger_keywords = ["patent", "news", "funding", "github", "code", "reddit", "sentiment", "user feedback", "paper"]
+        trigger_keywords = [
+            "patent", "news", "funding", "github", "code", "reddit", "sentiment",
+            "user feedback", "paper", "model", "download", "adoption", "huggingface",
+            "hugging face", "hacker news", "hackernews",
+        ]
 
         if any(kw in q_lower for kw in trigger_keywords):
             tool_res = field_agent.execute_targeted_followup(request.question, max_items=3)
@@ -247,6 +260,8 @@ def analyst_chat(request: ChatRequest):
             format_context_items("PATENT FINDINGS", request.context_patents),
             format_context_items("GITHUB FINDINGS", request.context_github),
             format_context_items("REDDIT COMMUNITY FINDINGS", request.context_reddit),
+            format_context_items("PUBLISHED MODEL TRACTION (HUGGING FACE)", request.context_models),
+            format_context_items("HACKER NEWS ENGAGEMENT", request.context_hackernews),
         ])
 
         history = [m.model_dump() for m in (request.chat_history or [])]

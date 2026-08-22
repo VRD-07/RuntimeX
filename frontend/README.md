@@ -38,6 +38,22 @@ VITE_API_URL=https://your-fastapi-backend.onrender.com
 
 `competitors` is a **comma-separated string** (e.g. `"Sarvam, OpenAI, Google"`), not an array.
 
+### Source types
+
+A scan returns seven source buckets. `structured_output.sections` is an **array** of `{ source_type, items }` (look one up with `.find(s => s.source_type === type)`, not by key), and each bucket also appears as a flat top-level array:
+
+| `source_type` | UI label | Flat response key | `context_*` key for `/api/chat` |
+| :--- | :--- | :--- | :--- |
+| `news` | News | `news` | `context_competitors` |
+| `research` | Research | `papers` | `context_research` |
+| `patents` | Patents | `patents` | `context_patents` |
+| `github` | GitHub | `github_repos` | `context_github` |
+| `reddit` | Reddit | `reddit_posts` | `context_reddit` |
+| `models` | Model Hub | `hf_models` | `context_models` |
+| `hackernews` | Hacker News | `hn_posts` | `context_hackernews` |
+
+These are mirrored in `SOURCE_TYPES` / `SOURCE_LABELS` / `SOURCE_RESPONSE_KEYS` at the top of `src/App.jsx`. Adding a source means editing those three constants — the filter chips, the source chart and the card badges all derive from them, so nothing is hardcoded per source.
+
 ---
 
 ## 🌐 1-Click Deployment to Vercel

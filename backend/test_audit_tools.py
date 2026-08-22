@@ -1,4 +1,4 @@
-"""Live contract smoke test for the five research tools.
+"""Live contract smoke test for every research tool.
 
 Every tool must return a dict shaped as:
     {"text": str, "items": [{title, snippet, source_name, date, url}], "source_type": str}
@@ -17,6 +17,8 @@ import sys
 
 from tools.competitor_tool import search_news
 from tools.github_tool import search_github
+from tools.hf_tool import search_huggingface_models
+from tools.hn_tool import search_hackernews
 from tools.patent_tool import search_patents
 from tools.reddit_tool import search_reddit
 from tools.research_tool import search_semantic_scholar
@@ -42,7 +44,18 @@ CASES = [
     ("search_patents", lambda: search_patents("speech recognition", max_results=5), "patents"),
     ("search_github", lambda: search_github("indic llm", max_results=5), "github"),
     ("search_reddit", lambda: search_reddit("Sarvam AI", max_results=5), "reddit"),
+    (
+        "search_huggingface_models",
+        lambda: search_huggingface_models("sarvam", max_results=5),
+        "models",
+    ),
+    ("search_hackernews", lambda: search_hackernews("Sarvam AI", max_results=5), "hackernews"),
 ]
+
+# Kept in step with SECTION_ORDER in agent_brain.py: a tool whose source_type is
+# not a known section is silently discarded by build_sections, so the test asserts
+# the set of covered types rather than trusting the CASES list to stay complete.
+EXPECTED_SOURCE_TYPES = {"news", "research", "patents", "github", "reddit", "models", "hackernews"}
 
 
 def check(name, result, expected_source_type):
@@ -114,13 +127,24 @@ def main():
             print("  OK")
         print()
 
+    from agent_brain import SECTION_ORDER
+
+    covered = {expected for _, _, expected in CASES}
+    uncovered = set(SECTION_ORDER) - covered
+    if uncovered:
+        failures.append(f"SECTION_ORDER has untested source types: {', '.join(sorted(uncovered))}")
+    unknown = covered - set(SECTION_ORDER)
+    if unknown:
+        failures.append(f"tests declare source types absent from SECTION_ORDER: {', '.join(sorted(unknown))}")
+
     print("=" * 62)
     if failures:
-        print(f"FAILED — {len(failures)} tool(s) broke the contract:")
+        print(f"FAILED — {len(failures)} contract problem(s):")
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print("PASSED — all five tools honour the dict contract.")
+    print(f"PASSED — all {len(CASES)} tools honour the dict contract, and every "
+          f"SECTION_ORDER source type is covered.")
     return 0
 
 

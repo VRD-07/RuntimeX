@@ -4,5 +4,7 @@ httpx>=0.25.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 google-genai>=1.0.0
-# Used only by the Google Patents web-search fallback in tools/patent_tool.py
-duckduckgo-search>=5.0.0
+# Used only by the tier-3 Google Patents web-search fallback in tools/patent_tool.py.
+# duckduckgo-search was renamed to ddgs; the tool imports ddgs first and falls back
+# to the old name, so an existing environment keeps working without a reinstall.
+ddgs>=9.0.0
