@@ -8,13 +8,15 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def search_news(query: str, max_results: int = 5) -> str:
+def search_news(query: str, max_results: int = 5) -> Dict[str, Any]:
     """
-    Finds recent news articles using real News APIs (NewsAPI.org / GNews / Official Google News API).
-    Zero DuckDuckGo scrapers used. Includes retry-with-backoff and logs the exact request URL.
+    Finds recent news articles using real News APIs (NewsAPI.org / GNews / Google News RSS).
+    Includes retry-with-backoff and logs the exact request URL.
+
+    Returns {"text": <observation for the LLM>, "items": [...], "source_type": "news"}.
+    Every item carries the URL reported by the upstream API — never a synthesized one.
     """
     clean_query = query.replace("Competitors:", "").replace("Track", "").replace("news", "").strip()
     if not clean_query:
@@ -130,7 +132,11 @@ def search_news(query: str, max_results: int = 5) -> str:
     if not news_items:
         msg = f"No recent news articles found for query: '{clean_query}'"
         logger.info(f"[TOOL RAW RESULT]: {msg}")
-        return f"[{source_name_label} Observation]: {msg}"
+        return {
+            "text": f"[{source_name_label} Observation]: {msg}",
+            "items": [],
+            "source_type": "news",
+        }
 
     formatted_items = []
     for n in news_items:
@@ -140,6 +146,6 @@ def search_news(query: str, max_results: int = 5) -> str:
             f"  URL: {n['url']}"
         )
 
-    obs = f"[{source_name_label} Observation per {source_name_label}]: Found {len(news_items)} articles for query '{clean_query}':\n" + "\n".join(formatted_items)
+    obs = f"[{source_name_label} Observation]: Found {len(news_items)} articles for query '{clean_query}':\n" + "\n".join(formatted_items)
     logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
-    return obs
+    return {"text": obs, "items": news_items, "source_type": "news"}

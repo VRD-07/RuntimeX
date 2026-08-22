@@ -1,27 +1,59 @@
 import os
+import logging
+import sys
 from typing import List, Dict, Any, Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from agent_brain import AutonomousReActAgent, TOOL_REGISTRY, FieldAgent
-from tools.research_tool import search_semantic_scholar
-from tools.patent_tool import search_patents
-from tools.competitor_tool import search_news
-from tools.github_tool import search_github
-from tools.reddit_tool import search_reddit
+from agent_brain import (
+    AutonomousReActAgent,
+    FieldAgent,
+    TOOL_REGISTRY,
+    DEFAULT_GEMINI_MODEL,
+    SUPPORTED_GEMINI_MODELS,
+    GENAI_AVAILABLE,
+    format_context_items,
+    llm_available,
+    resolve_model,
+    synthesize_chat_answer,
+)
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Logging
+#
+# Configured here only, because this module is the application entrypoint;
+# library modules just call getLogger(__name__). Tool output is arbitrary text
+# from third-party APIs, so the stream handler must tolerate characters the
+# console codec cannot represent — on a Windows cp1252 console an unescaped
+# curly quote in a news headline would otherwise raise UnicodeEncodeError
+# mid-request and turn a successful scan into a 500.
+# ---------------------------------------------------------------------------
+_log_stream = sys.stdout
+try:
+    _log_stream.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):  # pragma: no cover - non-reconfigurable stream
+    pass
+
+_handler = logging.StreamHandler(_log_stream)
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
+logger = logging.getLogger("intelpulse.api")
 
 app = FastAPI(
     title="IntelPulse ReAct Autonomous Agent API",
     description="Autonomous Research & Competitor Tracking Agent adhering to strict ReAct Grounded Reasoning format.",
-    version="2.1.0"
+    version="2.2.0"
 )
 
-# CORS Configuration
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
 raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
 origins_list = [o.strip().rstrip("/") for o in raw_allowed_origins.split(",") if o.strip()]
 
@@ -31,24 +63,35 @@ default_explicit_origins = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
 ]
-
 explicit_cors_origins = list(dict.fromkeys(default_explicit_origins + origins_list))
+
+# Scoped to this project's Vercel deployments (including preview URLs) rather than every
+# *.vercel.app host. Override with ALLOWED_ORIGIN_REGEX if the project is renamed.
+DEFAULT_ORIGIN_REGEX = r"^https://runtime-x[a-z0-9-]*\.vercel\.app$"
+cors_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX", "").strip() or DEFAULT_ORIGIN_REGEX
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=explicit_cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
+    allow_origin_regex=cors_origin_regex,
+    # No cookie or HTTP-auth flows exist on this API, so credentialed cross-origin
+    # requests are not permitted. Bearer tokens in Authorization still work.
+    allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
 )
 
-# Pydantic Schemas
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 class ScanRequest(BaseModel):
     topic: str = Field(default="Regional language capabilities for AI", description="Research topic or domain to scan")
-    competitors: str = Field(default="Sarvam, OpenAI, Google", description="Competitor names or keywords")
+    competitors: str = Field(default="Sarvam, OpenAI, Google", description="Comma-separated competitor names or keywords")
     max_items: int = Field(default=5, ge=1, le=10, description="Items to fetch per source")
-    model: Optional[str] = Field(default="claude-3-5-sonnet", description="Model choice")
+    max_steps: int = Field(default=12, ge=1, le=24, description="Maximum number of grounded tool calls per scan")
+    model: Optional[str] = Field(default=DEFAULT_GEMINI_MODEL, description="Gemini model id used for synthesis")
+
 
 class ScanResponse(BaseModel):
     status: str
@@ -57,30 +100,44 @@ class ScanResponse(BaseModel):
     structured_output: Optional[Dict[str, Any]] = None
     final_answer: str
     executive_report: str
-    papers: List[Dict[str, Any]]
-    news: List[Dict[str, Any]]
-    patents: Optional[List[Dict[str, Any]]] = []
-    github_repos: Optional[List[Dict[str, Any]]] = []
-    trace: List[Dict[str, Any]]
+    gap_report: List[Dict[str, Any]] = []
+    papers: List[Dict[str, Any]] = []
+    news: List[Dict[str, Any]] = []
+    patents: List[Dict[str, Any]] = []
+    github_repos: List[Dict[str, Any]] = []
+    reddit_posts: List[Dict[str, Any]] = []
+    trace: List[Dict[str, Any]] = []
     memory_recall: Optional[Dict[str, Any]] = None
-    agentrouter_active: bool
+    llm_active: bool
+    model_used: str
+
 
 class ChatMessage(BaseModel):
     role: str
     content: str
 
+
 class ChatRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, description="Analyst follow-up question")
     chat_history: Optional[List[ChatMessage]] = []
     context_research: List[Dict[str, Any]] = []
     context_competitors: List[Dict[str, Any]] = []
-    model: Optional[str] = "claude-3-5-sonnet"
+    context_patents: List[Dict[str, Any]] = []
+    context_github: List[Dict[str, Any]] = []
+    context_reddit: List[Dict[str, Any]] = []
+    model: Optional[str] = DEFAULT_GEMINI_MODEL
+
 
 class ChatResponse(BaseModel):
     answer: str
     status: str
     tool_executed: Optional[Dict[str, Any]] = None
+    llm_active: bool
 
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 @app.get("/")
 def read_root():
     return {
@@ -90,144 +147,150 @@ def read_root():
         "available_tools": list(TOOL_REGISTRY.keys())
     }
 
+
 @app.get("/api/health")
 def health_check():
-    api_key_present = bool(os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("AGENTROUTER_API_KEY", "").strip())
+    active = llm_available()
     return {
         "status": "healthy",
-        "agentrouter_active": api_key_present,
-        "engine_mode": "Gemini 2.5 ReAct" if api_key_present else "Fallback Grounded ReAct",
+        "llm_active": active,
+        # Deprecated alias retained so older cached frontend builds keep working.
+        "agentrouter_active": active,
+        "engine_mode": f"{resolve_model(None)} synthesis" if active else "Deterministic rule-based fallback",
+        "sdk_installed": GENAI_AVAILABLE,
+        "api_key_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "supported_models": sorted(SUPPORTED_GEMINI_MODELS),
         "tools_loaded": list(TOOL_REGISTRY.keys())
     }
+
 
 @app.post("/api/scan/stream")
 def stream_autonomous_scan(request: ScanRequest):
     """
-    Real-time Dynamic Streaming Endpoint:
-    Yields memory recall, agent thoughts, actions, observations, and final reports line-by-line as NDJSON.
+    Real-time streaming endpoint.
+    Yields memory recall, agent thoughts, actions, observations, and the final report as NDJSON.
     """
     agent = AutonomousReActAgent(model=request.model)
     return StreamingResponse(
-        agent.stream_scan(topic=request.topic, competitors=request.competitors, max_items=request.max_items),
+        agent.stream_scan(
+            topic=request.topic,
+            competitors=request.competitors,
+            max_items=request.max_items,
+            max_steps=request.max_steps,
+        ),
         media_type="application/x-ndjson"
     )
+
 
 @app.post("/api/scan", response_model=ScanResponse)
 def run_autonomous_scan(request: ScanRequest):
     """
-    Frontend Integration Endpoint: Executes Autonomous ReAct Agent Scan.
+    Non-streaming scan endpoint. Runs the full orchestration and returns the complete result.
+    Also serves as the frontend's fallback when the streaming connection fails.
     """
     try:
         agent = AutonomousReActAgent(model=request.model)
-        result = agent.run_scan(topic=request.topic, competitors=request.competitors, max_items=request.max_items, max_steps=12)
-        
-        return ScanResponse(
-            status="success",
+        result = agent.run_scan(
             topic=request.topic,
             competitors=request.competitors,
-            papers=[],
-            news=[],
+            max_items=request.max_items,
+            max_steps=request.max_steps,
+        )
+
+        return ScanResponse(
+            status="success",
+            topic=result["topic"],
+            competitors=result["competitors"],
+            structured_output=result["structured_output"],
+            final_answer=result["final_answer"],
             executive_report=result["executive_report"],
-            trace=result["trace"],
+            gap_report=result.get("gap_report", []),
+            papers=result.get("papers", []),
+            news=result.get("news", []),
+            patents=result.get("patents", []),
+            github_repos=result.get("github_repos", []),
+            reddit_posts=result.get("reddit_posts", []),
+            trace=result.get("trace", []),
             memory_recall=result.get("memory_recall"),
-            agentrouter_active=result["agentrouter_active"]
+            llm_active=result.get("llm_active", False),
+            model_used=result.get("model_used", ""),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Scan failed")
+        raise HTTPException(status_code=500, detail=f"Scan failed: {e}")
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 def analyst_chat(request: ChatRequest):
     """
-    Analyst Q&A Chat endpoint with Multi-Turn Memory & Field Agent Targeted Tool Execution.
+    Analyst Q&A endpoint with multi-turn memory, scan-grounded context, and targeted tool execution.
     - Preserves prior conversation turns (chat_history).
-    - If user asks a targeted follow-up (e.g. 'patent', 'news', 'github'), triggers 1 Field Agent tool call.
-    - Tags follow-up tool call in trace with trigger='user_followup'.
+    - Grounds the answer in the findings the frontend retrieved during the scan.
+    - Targeted follow-ups (e.g. 'patent', 'news', 'github') trigger one live Field Agent tool call.
     """
     try:
         field_agent = FieldAgent(model=request.model)
         tool_res = None
-        
-        # Check if question requires a fresh targeted tool call
+
         q_lower = request.question.lower()
         trigger_keywords = ["patent", "news", "funding", "github", "code", "reddit", "sentiment", "user feedback", "paper"]
-        
+
         if any(kw in q_lower for kw in trigger_keywords):
             tool_res = field_agent.execute_targeted_followup(request.question, max_items=3)
             tool_res["trigger"] = "user_followup"
             tool_res["agent_role"] = "Field Agent"
 
-        # Build stateful prompt with full chat history
-        history_context = ""
-        if request.chat_history:
-            history_context = "\n\nCONVERSATION HISTORY:\n" + "\n".join([
-                f"{msg.role.upper()}: {msg.content}" for msg in request.chat_history[-6:]
-            ])
+        # Ground the answer in the scan findings the client is displaying
+        context_blocks = "".join([
+            format_context_items("NEWS FINDINGS", request.context_competitors),
+            format_context_items("RESEARCH FINDINGS", request.context_research),
+            format_context_items("PATENT FINDINGS", request.context_patents),
+            format_context_items("GITHUB FINDINGS", request.context_github),
+            format_context_items("REDDIT COMMUNITY FINDINGS", request.context_reddit),
+        ])
 
-        tool_context = ""
-        if tool_res:
-            tool_context = f"\n\nREAL-TIME TARGETED FIELD OBSERVATION (Triggered by follow-up):\nAction: {tool_res['action']}\nObservation:\n{tool_res['observation']}"
-
-        prompt = (
-            f"You are the Strategic Analyst Agent responding to a follow-up question."
-            f"{history_context}"
-            f"{tool_context}\n\n"
-            f"USER FOLLOW-UP QUESTION: {request.question}\n"
-            f"Provide a concise 2-4 sentence analytical answer citing the grounded data."
+        history = [m.model_dump() for m in (request.chat_history or [])]
+        answer_text = synthesize_chat_answer(
+            question=request.question,
+            chat_history=history,
+            context_blocks=context_blocks,
+            tool_res=tool_res,
+            model=request.model,
         )
 
-        # Execute LLM Answer Synthesis
-        api_key = os.getenv('GEMINI_API_KEY', '')
-        model_name = request.model or os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
-
-        import logging
-        import google.generativeai as genai
-
-        chat_logger = logging.getLogger("main")
-        chat_logger.info("=== [GEMINI CHAT LLM API REQUEST START] ===")
-        chat_logger.info(f"[Model Name]: '{model_name}'")
-        chat_logger.info(f"[API Key Check]: Non-empty={bool(api_key)}, Key Length={len(api_key)}")
-
-        answer_text = ""
-        if api_key:
-            try:
-                genai.configure(api_key=api_key)
-                try:
-                    g_model = genai.GenerativeModel(
-                        model_name=model_name,
-                        system_instruction="You are the Strategic Analyst Agent handling user follow-up questions with grounded memory."
-                    )
-                    response = g_model.generate_content(prompt)
-                except Exception:
-                    g_model = genai.GenerativeModel(
-                        model_name="gemini-1.5-flash",
-                        system_instruction="You are the Strategic Analyst Agent handling user follow-up questions with grounded memory."
-                    )
-                    response = g_model.generate_content(prompt)
-
-                chat_logger.info("=== [GEMINI CHAT LLM API RESPONSE RECEIVED] ===")
-                chat_logger.info(f"[Raw Response Text]: {response.text}")
-                if response.text:
-                    answer_text = response.text.strip()
-            except Exception as e:
-                chat_logger.error("=== [GEMINI CHAT LLM API EXCEPTION] ===", exc_info=True)
-                chat_logger.error(f"[Chat API Exception Detail]: {e}")
-
         if not answer_text:
-            if tool_res:
-                answer_text = f"Based on the real-time targeted field lookup (`{tool_res['action']}`), here are the latest observations:\n\n{tool_res['observation'][:400]}..."
+            # Deterministic fallback: report real retrieved data, never invented analysis.
+            if tool_res and tool_res["items"]:
+                titles = "\n".join(f"- {i['title']} ({i.get('source_name', 'source')})" for i in tool_res["items"][:3])
+                answer_text = (
+                    f"LLM synthesis is unavailable, so here is the raw result of the live "
+                    f"`{tool_res['action']}` lookup:\n\n{titles}"
+                )
+            elif context_blocks:
+                answer_text = (
+                    "LLM synthesis is unavailable, so no narrative answer can be generated. "
+                    f"The scan findings currently loaded are:{context_blocks[:800]}"
+                )
             else:
-                answer_text = f"Analyst Response to '{request.question}': Based on the retrieved intelligence observations, the competitive density remains focused across key technical benchmarks."
+                answer_text = (
+                    "LLM synthesis is unavailable and no scan findings are loaded yet. "
+                    "Run a scan first, then ask again."
+                )
 
         return ChatResponse(
             answer=answer_text,
             status="success",
-            tool_executed=tool_res
+            tool_executed=tool_res,
+            llm_active=llm_available(),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Chat request failed")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
-    uvicorn.run("main:app", host=host, port=port, reload=True)
+    # reload is a development convenience; Render/production should run uvicorn directly.
+    uvicorn.run("main:app", host=host, port=port, reload=os.getenv("UVICORN_RELOAD", "").lower() == "true")

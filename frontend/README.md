@@ -31,9 +31,12 @@ VITE_API_URL=https://your-fastapi-backend.onrender.com
 ```
 
 ### Key API Endpoints Used:
-- `GET /api/health` -> Checks backend status & AgentRouter status.
-- `POST /api/scan` -> Runs paper & competitor scan + executive report generation.
-- `POST /api/chat` -> Sends user question to AI analyst.
+- `GET /api/health` -> Backend status and whether Gemini synthesis is active (`llm_active`).
+- `POST /api/scan/stream` -> Primary scan path. Streams the agent trace as NDJSON, one JSON event per line (`step_start`, `step_complete`, `memory_recall`, `memory_update`, `final_complete`).
+- `POST /api/scan` -> Buffered scan. Used automatically as the fallback when the stream fails.
+- `POST /api/chat` -> Analyst follow-up. Send the findings currently on screen as `context_*` arrays so the answer stays grounded in real retrieved data.
+
+`competitors` is a **comma-separated string** (e.g. `"Sarvam, OpenAI, Google"`), not an array.
 
 ---
 

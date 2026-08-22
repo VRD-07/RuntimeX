@@ -3,14 +3,16 @@ import logging
 import urllib.parse
 from typing import List, Dict, Any
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def search_github(query: str, max_results: int = 5) -> str:
+def search_github(query: str, max_results: int = 5) -> Dict[str, Any]:
     """
     Finds active repositories on GitHub related to a technology or domain.
     Directly passes the exact input query parameter into the GitHub REST API request URL.
     Logs exact query strings right before the API call to confirm dynamic execution.
+
+    Returns {"text": <observation for the LLM>, "items": [...], "source_type": "github"}.
+    Item URLs are the html_url values returned by the GitHub API.
     """
     clean_query = query.replace("Competitors:", "").replace("Track", "").replace("github", "").replace("repositories", "").strip()
     if not clean_query:
@@ -61,7 +63,11 @@ def search_github(query: str, max_results: int = 5) -> str:
     if not results:
         msg = f"No active open-source repositories found for query: '{clean_query}'"
         logger.info(f"[TOOL RAW RESULT]: {msg}")
-        return f"[GitHub Observation]: {msg}"
+        return {
+            "text": f"[GitHub Observation]: {msg}",
+            "items": [],
+            "source_type": "github",
+        }
 
     formatted_items = []
     for r in results:
@@ -73,4 +79,17 @@ def search_github(query: str, max_results: int = 5) -> str:
 
     obs = f"[GitHub Observation per GitHub API]: Found {len(results)} active repositories for query '{clean_query}':\n" + "\n".join(formatted_items)
     logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
-    return obs
+
+    items = [
+        {
+            "title": r["name"],
+            "snippet": r["description"],
+            # ASCII only: this string reaches the log stream, and a Windows
+            # cp1252 console raises UnicodeEncodeError on glyphs like U+2605.
+            "source_name": f"GitHub | {r['stars']} stars | {r['language']}",
+            "date": r["updated_at"],
+            "url": r["url"],
+        }
+        for r in results
+    ]
+    return {"text": obs, "items": items, "source_type": "github"}

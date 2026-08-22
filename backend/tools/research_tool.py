@@ -6,17 +6,19 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Irrelevant domains to filter out
 EXCLUDED_KEYWORDS = ["covid", "contact tracing", "epidemic", "neutron", "kilonova", "astrophysics", "cell biology"]
 
-def search_semantic_scholar(query: str, max_results: int = 5) -> str:
+def search_semantic_scholar(query: str, max_results: int = 5) -> Dict[str, Any]:
     """
     Finds recent academic papers using official academic APIs.
     Calls Semantic Scholar Graph API as primary source; if HTTP 429 is hit, falls back to ArXiv API with explicit relabeling.
     Prints literal request URL before execution and includes retry-with-backoff.
+
+    Returns {"text": <observation for the LLM>, "items": [...], "source_type": "research"}.
+    Item URLs come straight from the upstream API.
     """
     clean_query = query.replace("Competitors:", "").replace("Track", "").replace("research", "").replace("papers", "").strip()
     if not clean_query:
@@ -41,6 +43,7 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
 
     papers = []
     source_label = "[Semantic Scholar Observation per Semantic Scholar Graph API]"
+    api_source_name = "Semantic Scholar"
     ss_response = None
 
     # 1. Primary Attempt: Semantic Scholar Graph API (with 1 retry)
@@ -101,7 +104,8 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
 
     # 2. Fallback Attempt: ArXiv API (Explicitly Relabeled)
     if not papers:
-        source_label = "[ArXiv Research API Observation (Fallback from Semantic Scholar 429)]"
+        source_label = "[ArXiv Research API Observation (Fallback from Semantic Scholar)]"
+        api_source_name = "arXiv"
         arxiv_url = f"https://export.arxiv.org/api/query?search_query=all:{encoded_query}&max_results={max_results*2}"
         logger.info(f"[ArXiv Fallback API Call]: Executing request URL: '{arxiv_url}'")
         
@@ -153,7 +157,11 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
     if not papers:
         msg = f"No academic publications found for query: '{clean_query}'"
         logger.info(f"[TOOL RAW RESULT]: {msg}")
-        return f"{source_label}: {msg}"
+        return {
+            "text": f"{source_label}: {msg}",
+            "items": [],
+            "source_type": "research",
+        }
 
     formatted_items = []
     for p in papers:
@@ -166,4 +174,15 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
 
     obs = f"{source_label}: Found {len(papers)} publications for query '{clean_query}':\n" + "\n".join(formatted_items)
     logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
-    return obs
+
+    items = [
+        {
+            "title": p["title"],
+            "snippet": p["abstract"],
+            "source_name": f"{api_source_name} ({p['citations']} citations)" if p["citations"] != "N/A" else api_source_name,
+            "date": p["year"],
+            "url": p["url"],
+        }
+        for p in papers
+    ]
+    return {"text": obs, "items": items, "source_type": "research"}

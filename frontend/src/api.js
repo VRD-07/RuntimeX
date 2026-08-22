@@ -1,18 +1,23 @@
 // Decoupled API Service Layer for IntelPulse Backend
 export const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
+// Must match SUPPORTED_GEMINI_MODELS / DEFAULT_GEMINI_MODEL in the backend.
+export const DEFAULT_MODEL = 'gemini-2.5-flash';
+
 export async function checkHealth() {
   try {
     const res = await fetch(`${API_BASE_URL}/api/health`);
     if (!res.ok) throw new Error('Health check failed');
-    return await res.json();
+    const data = await res.json();
+    // Tolerate older backends that only reported the legacy agentrouter_active flag.
+    return { ...data, llm_active: data.llm_active ?? data.agentrouter_active ?? false };
   } catch (err) {
     console.error('API Health Error:', err);
-    return { status: 'offline', agentrouter_active: false };
+    return { status: 'offline', llm_active: false };
   }
 }
 
-export async function runScanStream(topic, competitors, maxItems = 5, model = 'claude-3-5-sonnet', onChunk) {
+export async function runScanStream(topic, competitors, maxItems = 5, model = DEFAULT_MODEL, onChunk) {
   const res = await fetch(`${API_BASE_URL}/api/scan/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -37,7 +42,7 @@ export async function runScanStream(topic, competitors, maxItems = 5, model = 'c
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    
+
     const lines = buffer.split('\n');
     buffer = lines.pop();
 
@@ -57,11 +62,13 @@ export async function runScanStream(topic, competitors, maxItems = 5, model = 'c
     try {
       const chunk = JSON.parse(buffer);
       if (onChunk) onChunk(chunk);
-    } catch (e) {}
+    } catch (e) {
+      console.error('NDJSON tail parse error:', e);
+    }
   }
 }
 
-export async function runScan(topic, competitors, maxItems = 5, model = 'claude-3-5-sonnet') {
+export async function runScan(topic, competitors, maxItems = 5, model = DEFAULT_MODEL) {
   const res = await fetch(`${API_BASE_URL}/api/scan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -81,15 +88,23 @@ export async function runScan(topic, competitors, maxItems = 5, model = 'claude-
   return await res.json();
 }
 
-export async function sendChatMessage(question, chatHistory = [], contextResearch = [], contextCompetitors = [], model = 'claude-3-5-sonnet') {
+/**
+ * Sends an analyst follow-up question.
+ * `context` carries the findings currently displayed so the answer stays grounded in them:
+ *   { research: [], competitors: [], patents: [], github: [], reddit: [] }
+ */
+export async function sendChatMessage(question, chatHistory = [], context = {}, model = DEFAULT_MODEL) {
   const res = await fetch(`${API_BASE_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       question,
       chat_history: chatHistory,
-      context_research: contextResearch,
-      context_competitors: contextCompetitors,
+      context_research: context.research || [],
+      context_competitors: context.competitors || [],
+      context_patents: context.patents || [],
+      context_github: context.github || [],
+      context_reddit: context.reddit || [],
       model
     })
   });

@@ -26,16 +26,20 @@ import {
   CheckCircle2,
   History,
   Clock,
-  ArrowRight
+  ArrowRight,
+  AlertTriangle
 } from 'lucide-react';
 
+// Synthesis is served by Gemini. These ids must match SUPPORTED_GEMINI_MODELS in the backend.
 const MODEL_NAMES = {
-  'claude-3-5-sonnet': 'Claude 3.5 Sonnet',
-  'claude-3-7-sonnet': 'Claude 3.7 Sonnet',
-  'claude-3-5-haiku': 'Claude 3.5 Haiku',
-  'gpt-4o': 'GPT-4o',
-  'deepseek-r1': 'DeepSeek R1'
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-2.0-flash': 'Gemini 2.0 Flash',
+  'gemini-1.5-flash': 'Gemini 1.5 Flash',
+  'gemini-1.5-pro': 'Gemini 1.5 Pro'
 };
+
+const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 const CHART_COLORS = ['#C2603A', '#6E7455', '#2A2723', '#8B9467', '#D38B5D'];
 
@@ -135,10 +139,11 @@ export default function App() {
   const [topic, setTopic] = useState('Regional language capabilities for AI');
   const [competitors, setCompetitors] = useState('Sarvam, OpenAI, Google');
   const [maxItems, setMaxItems] = useState(5);
-  const [model, setModel] = useState('claude-3-5-sonnet');
-  
+  const [model, setModel] = useState(DEFAULT_MODEL);
+
   const [loading, setLoading] = useState(false);
-  const [health, setHealth] = useState({ status: 'checking', agentrouter_active: false });
+  const [scanError, setScanError] = useState(null);
+  const [health, setHealth] = useState({ status: 'checking', llm_active: false });
   const [scanResult, setScanResult] = useState(null);
 
   // Filters state
@@ -182,6 +187,7 @@ export default function App() {
   const handleScan = async (e) => {
     if (e) e.preventDefault();
     setScanResult(null);
+    setScanError(null);
     setLoading(true);
     setStaggeredStepCount(0);
 
@@ -201,6 +207,12 @@ export default function App() {
           };
           dynamicTrace = [memStep, ...dynamicTrace.filter(s => s.step !== 0)];
           setScanResult({ trace: dynamicTrace });
+        } else if (chunk.type === 'memory_update') {
+          // The real delta is only known once the scan has finished; patch step 0 in place.
+          dynamicTrace = dynamicTrace.map(s =>
+            s.step === 0 ? { ...s, content: chunk.content, delta: chunk.delta } : s
+          );
+          setScanResult(prev => ({ ...(prev || {}), trace: dynamicTrace }));
         } else if (chunk.type === 'step_start') {
           const newStep = {
             step: chunk.step,
@@ -229,9 +241,15 @@ export default function App() {
         }
       });
     } catch (err) {
-      console.warn("Streaming error fallback:", err);
-      const data = await runScan(topic, competitors, maxItems, model);
-      setScanResult(data);
+      console.warn('Streaming failed, retrying with non-streaming scan:', err);
+      try {
+        const data = await runScan(topic, competitors, maxItems, model);
+        setScanResult(data);
+      } catch (fallbackErr) {
+        console.error('Scan failed:', fallbackErr);
+        setScanError(fallbackErr.message || 'Scan failed. Check that the backend is running.');
+        setScanResult(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -248,9 +266,20 @@ export default function App() {
     setChatLoading(true);
 
     try {
-      const contextResearch = scanResult?.papers || [];
-      const contextCompetitors = scanResult?.news || [];
-      const res = await sendChatMessage(userQuestion, updatedHistory, contextResearch, contextCompetitors, model);
+      const sectionItems = (type) => {
+        const fromSections = scanResult?.structured_output?.sections?.find(s => s.source_type === type)?.items;
+        if (fromSections) return fromSections;
+        const legacyKey = { news: 'news', research: 'papers', patents: 'patents', github: 'github_repos', reddit: 'reddit_posts' }[type];
+        return scanResult?.[legacyKey] || [];
+      };
+
+      const res = await sendChatMessage(userQuestion, updatedHistory, {
+        research: sectionItems('research'),
+        competitors: sectionItems('news'),
+        patents: sectionItems('patents'),
+        github: sectionItems('github'),
+        reddit: sectionItems('reddit')
+      }, model);
       
       let answerWithBadge = res.answer;
       if (res.tool_executed) {
@@ -400,11 +429,9 @@ export default function App() {
                 onChange={(e) => setModel(e.target.value)}
                 className="bg-transparent text-[#EAE3D2] text-xs font-mono font-medium focus:outline-none cursor-pointer"
               >
-                <option value="claude-3-5-sonnet" className="bg-[#2A2723] text-white">Claude 3.5 Sonnet</option>
-                <option value="claude-3-7-sonnet" className="bg-[#2A2723] text-white">Claude 3.7 Sonnet</option>
-                <option value="claude-3-5-haiku" className="bg-[#2A2723] text-white">Claude 3.5 Haiku</option>
-                <option value="gpt-4o" className="bg-[#2A2723] text-white">GPT-4o</option>
-                <option value="deepseek-r1" className="bg-[#2A2723] text-white">DeepSeek R1</option>
+                {Object.entries(MODEL_NAMES).map(([id, label]) => (
+                  <option key={id} value={id} className="bg-[#2A2723] text-white">{label}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -492,6 +519,19 @@ export default function App() {
                 )}
               </button>
             </form>
+
+            {scanError && (
+              <div
+                role="alert"
+                className="mt-4 flex items-start gap-2 bg-[#C2603A]/12 border border-[#C2603A]/50 rounded-xl p-3 font-mono text-xs text-[#2A2723]"
+              >
+                <AlertTriangle className="w-4 h-4 text-[#C2603A] shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-[#C2603A]">Scan failed</p>
+                  <p className="mt-0.5 break-words">{scanError}</p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* VISIBLE MEMORY TRACE PANEL (PART C) */}
@@ -535,12 +575,16 @@ export default function App() {
             </div>
             <div className="flex justify-between">
               <span className="text-[#6E7455]">Active Model:</span>
-              <span className="text-white font-semibold">{MODEL_NAMES[model] || model}</span>
+              <span className="text-white font-semibold">
+                {scanResult?.model_used
+                  ? (MODEL_NAMES[scanResult.model_used] || scanResult.model_used)
+                  : (MODEL_NAMES[model] || model)}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#6E7455]">API Key Status:</span>
-              <span className={health.agentrouter_active ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
-                {health.agentrouter_active ? "Gemini 2.5 Active" : "Fallback Engine Active"}
+              <span className={health.llm_active ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+                {health.llm_active ? "Gemini Active" : "Fallback Engine Active"}
               </span>
             </div>
           </div>

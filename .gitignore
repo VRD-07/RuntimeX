@@ -16,7 +16,13 @@ frontend/node_modules
 dist
 build
 
+# Local databases — long-term scan memory is per-deployment state, not source
+*.db
+*.sqlite
+*.sqlite3
+
 # Virtualenv
 venv/
 env/
 ENV/
+.venv/
