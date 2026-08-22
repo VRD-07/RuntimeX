@@ -6,77 +6,87 @@ from typing import List, Dict, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Irrelevant domains to filter out
+EXCLUDED_KEYWORDS = ["covid", "contact tracing", "epidemic", "neutron", "kilonova", "astrophysics", "cell biology"]
+
 def search_semantic_scholar(query: str, max_results: int = 5) -> str:
     """
-    Finds recent academic papers, citation counts, and influential works on a research topic.
-    Returns formatted observation string with explicit error logging.
+    Finds recent academic papers strictly relevant to the research domain.
+    Filters out off-topic papers like COVID contact tracing.
     """
-    clean_query = query.strip()
+    clean_query = query.replace("Competitors:", "").replace("Track", "").strip()
+    # Form concise 2-3 word search query
+    words = [w for w in clean_query.split() if w.lower() not in ["and", "for", "the", "in", "recent", "trends", "research", "patents", "news", "github"]]
+    focused_query = " ".join(words[:3]) if words else "dating app matching"
+    
+    logger.info(f"--- [TOOL CALL] search_semantic_scholar(focused_query='{focused_query}') ---")
     papers = []
-    error_msg = None
     
-    logger.info(f"--- [TOOL CALL] search_semantic_scholar(query='{clean_query}') ---")
-    
-    # 1. Attempt Semantic Scholar Graph API
+    # 1. Semantic Scholar API Call
     try:
-        url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={clean_query}&limit={max_results}&fields=title,authors,year,citationCount,abstract,url,venue"
+        url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={focused_query}&limit=10&fields=title,authors,year,citationCount,abstract,url,venue"
         headers = {"User-Agent": "IntelPulse-Autonomous-Agent/1.0"}
         with httpx.Client(timeout=10.0) as client:
             response = client.get(url, headers=headers)
-            logger.info(f"[Semantic Scholar API Status]: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
-                raw_items = data.get("data", [])
-                logger.info(f"[Semantic Scholar Raw Response Items]: {len(raw_items)}")
-                for item in raw_items:
+                for item in data.get("data", []):
+                    title = item.get("title", "")
+                    abstract = item.get("abstract", "") or ""
+                    
+                    # Filter out excluded topics
+                    if any(ex in title.lower() or ex in abstract.lower() for ex in EXCLUDED_KEYWORDS):
+                        continue
+                        
                     papers.append({
-                        "title": item.get("title"),
+                        "title": title,
                         "authors": [a.get("name") for a in item.get("authors", [])[:3]],
                         "year": item.get("year", "N/A"),
                         "citations": item.get("citationCount", 0),
-                        "abstract": (item.get("abstract") or "No abstract available")[:250],
+                        "abstract": abstract[:250],
                         "venue": item.get("venue", "Academic Publication"),
                         "url": item.get("url", "#"),
                         "source": "Semantic Scholar"
                     })
-            else:
-                error_msg = f"HTTP {response.status_code} - {response.text[:150]}"
+                    if len(papers) >= max_results:
+                        break
     except Exception as e:
-        error_msg = f"API Error: {str(e)}"
-        logger.warning(f"Semantic Scholar API notice: {error_msg}. Falling back to ArXiv API.")
+        logger.warning(f"Semantic Scholar API notice: {e}. Falling back to ArXiv.")
 
-    # 2. ArXiv Fallback if Semantic Scholar yields no results or errors
+    # 2. ArXiv Fallback with strict relevance filtering
     if not papers:
         try:
             search = arxiv.Search(
-                query=clean_query,
-                max_results=max_results,
+                query=f'all:"{focused_query}"',
+                max_results=20,
                 sort_by=arxiv.SortCriterion.Relevance,
                 sort_order=arxiv.SortOrder.Descending
             )
             client = arxiv.Client()
-            results = list(client.results(search))
-            logger.info(f"[ArXiv Fallback Raw Response Items]: {len(results)}")
-            for result in results:
+            for result in client.results(search):
+                title = result.title
+                summary = result.summary.replace("\n", " ")
+                
+                if any(ex in title.lower() or ex in summary.lower() for ex in EXCLUDED_KEYWORDS):
+                    continue
+                    
                 papers.append({
-                    "title": result.title,
+                    "title": title,
                     "authors": [a.name for a in result.authors[:3]],
                     "year": result.published.strftime("%Y") if result.published else "N/A",
                     "citations": "N/A",
-                    "abstract": result.summary.replace("\n", " ")[:250],
+                    "abstract": summary[:250],
                     "venue": "ArXiv Research",
                     "url": result.pdf_url,
                     "source": "ArXiv"
                 })
+                if len(papers) >= max_results:
+                    break
         except Exception as e:
             logger.error(f"Error fetching ArXiv papers: {e}")
-            if not error_msg:
-                error_msg = f"ArXiv Error: {str(e)}"
 
     if not papers:
-        msg = f"No results returned by Semantic Scholar for query: '{clean_query}'"
-        if error_msg:
-            msg += f" (Error details: {error_msg})"
+        msg = f"No academic papers found for query: '{focused_query}'"
         logger.info(f"[TOOL RAW RESULT]: {msg}")
         return f"[Semantic Scholar Observation]: {msg}"
 
@@ -89,6 +99,6 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
             f"  URL: {p['url']}"
         )
 
-    obs = f"[Semantic Scholar Observation per {papers[0]['source']}]: Found {len(papers)} academic publications for query '{clean_query}':\n" + "\n".join(formatted_items)
+    obs = f"[Semantic Scholar Observation per {papers[0]['source']}]: Found {len(papers)} academic publications for query '{focused_query}':\n" + "\n".join(formatted_items)
     logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
     return obs

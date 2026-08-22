@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import AgentDebugView from './debug/AgentDebugView';
-import { checkHealth, runScan, sendChatMessage } from './api';
+import { checkHealth, runScan, runScanStream, sendChatMessage } from './api';
 import { 
   Zap, 
   Search, 
@@ -51,13 +51,43 @@ export default function App() {
 
   const handleScan = async (e) => {
     if (e) e.preventDefault();
+    setScanResult(null); // Clear all previous results immediately
     setLoading(true);
+    setActiveTab('trace'); // Open Live Changing Feed of Thoughts immediately
+
+    let dynamicTrace = [];
+
     try {
+      await runScanStream(topic, competitors, maxItems, model, (chunk) => {
+        if (chunk.type === 'step_start') {
+          const newStep = {
+            step: chunk.step,
+            thought: chunk.thought,
+            action: chunk.action,
+            observation: null
+          };
+          dynamicTrace = [...dynamicTrace.filter(s => s.step !== chunk.step), newStep].sort((a, b) => a.step - b.step);
+          setScanResult({ trace: dynamicTrace });
+        } else if (chunk.type === 'step_complete') {
+          const updatedStep = {
+            step: chunk.step,
+            thought: chunk.thought,
+            action: chunk.action,
+            observation: chunk.observation
+          };
+          dynamicTrace = [...dynamicTrace.filter(s => s.step !== chunk.step), updatedStep].sort((a, b) => a.step - b.step);
+          setScanResult({ trace: dynamicTrace });
+        } else if (chunk.type === 'final_complete') {
+          setScanResult({
+            ...chunk,
+            trace: dynamicTrace
+          });
+        }
+      });
+    } catch (err) {
+      console.warn("Streaming error fallback:", err);
       const data = await runScan(topic, competitors, maxItems, model);
       setScanResult(data);
-      setActiveTab('report');
-    } catch (err) {
-      alert(`Scan failed: ${err.message}. Please ensure the Python FastAPI backend is running.`);
     } finally {
       setLoading(false);
     }
@@ -275,6 +305,16 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('trace')}
+              className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
+                activeTab === 'trace' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Cpu className="w-4 h-4 text-emerald-400" />
+              <span>Agent Thinking ({scanResult?.trace?.length || 0})</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('chat')}
               className={`pb-3 flex items-center space-x-2 border-b-2 transition-colors ${
                 activeTab === 'chat' ? 'border-sky-500 text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -395,6 +435,73 @@ export default function App() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Tab: Live Dynamic Agent Thoughts & Trace */}
+          {activeTab === 'trace' && (
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+              <div className="border-b border-slate-800 pb-3 flex justify-between items-center">
+                <div>
+                  <h3 className="font-semibold text-slate-100 text-base flex items-center gap-2">
+                    <Cpu className="w-5 h-5 text-emerald-400" />
+                    Live Dynamic Agent Thoughts & Tool Executions
+                  </h3>
+                  <p className="text-xs text-slate-400">Streaming real-time ReAct loop: Thought ➔ Action ➔ Observation ➔ Synthesis</p>
+                </div>
+                {loading && (
+                  <span className="flex items-center gap-2 text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 px-3 py-1 rounded-full font-mono animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    Agent Thinking Live...
+                  </span>
+                )}
+              </div>
+
+              {scanResult?.trace?.length > 0 ? (
+                <div className="space-y-4 font-mono text-xs">
+                  {scanResult.trace.map((step, idx) => (
+                    <div key={idx} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 shadow-inner transition-all">
+                      <div className="flex justify-between items-center">
+                        <span className="text-amber-400 font-bold text-sm">Step {step.step || idx + 1}</span>
+                        {step.observation === null ? (
+                          <span className="text-[10px] text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/30 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping"></span> Executing Tool...
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">✓ Grounded Observation</span>
+                        )}
+                      </div>
+                      <div className="text-slate-300">
+                        <span className="text-emerald-400 font-semibold">Thought: </span>
+                        {step.thought}
+                      </div>
+                      <div className="text-slate-300">
+                        <span className="text-pink-400 font-semibold">Action: </span>
+                        <code className="bg-slate-900 px-2 py-0.5 rounded text-pink-300 border border-slate-800">{step.action}</code>
+                      </div>
+                      {step.observation !== null && (
+                        <div>
+                          <span className="text-sky-400 font-semibold">Observation: </span>
+                          <pre className="mt-1.5 bg-slate-900 p-3 rounded-lg text-slate-300 overflow-x-auto text-[11px] whitespace-pre-wrap border border-slate-800 max-h-52 leading-relaxed">
+                            {step.observation}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                loading && (
+                  <div className="text-center py-12 text-slate-500 space-y-2">
+                    <Cpu className="w-8 h-8 mx-auto text-emerald-500 animate-pulse" />
+                    <p className="text-xs text-slate-300 font-mono">Initializing Agent & Formulating Thoughts...</p>
+                  </div>
+                )
+              )}
+
+              {!loading && (!scanResult?.trace || scanResult.trace.length === 0) && (
+                <p className="text-xs text-slate-500 text-center py-12">No agent thoughts generated yet. Click "Run Autonomous Scan".</p>
+              )}
             </div>
           )}
 

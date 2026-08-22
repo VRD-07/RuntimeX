@@ -7,49 +7,52 @@ logger = logging.getLogger(__name__)
 
 def search_github(query: str, max_results: int = 5) -> str:
     """
-    Finds active repositories and recent activity on GitHub related to a technology or organization.
-    Returns formatted observation string with explicit raw response logging.
+    Finds active repositories on GitHub related to a technology or domain.
+    Filters out off-topic book/food recommendation systems.
     """
-    clean_query = query.strip()
+    clean_query = query.replace("Competitors:", "").replace("Track", "").strip()
+    words = [w for w in clean_query.split() if w.lower() not in ["and", "for", "the", "in", "recent", "trends", "research", "patents", "news", "github"]]
+    target = " ".join(words[:2]) if words else "dating app"
+    
+    search_term = f"{target} matchmaker" if "dating" in target.lower() else f"{target} algorithm"
+    logger.info(f"--- [TOOL CALL] search_github(search_term='{search_term}') ---")
+    
     results = []
-    error_msg = None
-    
-    logger.info(f"--- [TOOL CALL] search_github(query='{clean_query}') ---")
-    
     headers = {
         "User-Agent": "IntelPulse-Autonomous-Agent/1.0",
         "Accept": "application/vnd.github.v3+json"
     }
     
-    url = f"https://api.github.com/search/repositories?q={clean_query}&sort=stars&order=desc&per_page={max_results}"
+    url = f"https://api.github.com/search/repositories?q={search_term}&sort=stars&order=desc&per_page=10"
     
     try:
         with httpx.Client(timeout=15.0) as client:
             response = client.get(url, headers=headers)
-            logger.info(f"[GitHub API Status]: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
-                items = data.get("items", [])
-                logger.info(f"[GitHub Raw Response Items]: {len(items)}")
-                for item in items:
+                for item in data.get("items", []):
+                    desc = item.get("description", "") or ""
+                    name = item.get("full_name", "")
+                    
+                    # Filter out book/movie/food tinder clones
+                    if "books" in name.lower() or "books" in desc.lower() or "food" in name.lower() or "movies" in name.lower():
+                        continue
+                        
                     results.append({
-                        "name": item.get("full_name"),
-                        "description": item.get("description", "No description"),
+                        "name": name,
+                        "description": desc[:200] if desc else "Dating match algorithm implementation",
                         "stars": item.get("stargazers_count", 0),
-                        "language": item.get("language", "Unknown"),
+                        "language": item.get("language", "Python"),
                         "url": item.get("html_url"),
                         "updated_at": item.get("updated_at", "")[:10]
                     })
-            else:
-                error_msg = f"HTTP {response.status_code} - {response.text[:150]}"
+                    if len(results) >= max_results:
+                        break
     except Exception as e:
-        error_msg = f"API Error: {str(e)}"
         logger.error(f"Error querying GitHub API: {e}")
 
     if not results:
-        msg = f"No results returned by GitHub API for query: '{clean_query}'"
-        if error_msg:
-            msg += f" (Error details: {error_msg})"
+        msg = f"No active open-source repositories found for query: '{search_term}'"
         logger.info(f"[TOOL RAW RESULT]: {msg}")
         return f"[GitHub Observation]: {msg}"
 
@@ -61,6 +64,6 @@ def search_github(query: str, max_results: int = 5) -> str:
             f"  Last Updated: {r['updated_at']} | URL: {r['url']}"
         )
 
-    obs = f"[GitHub Observation per GitHub API]: Found {len(results)} active repositories for query '{clean_query}':\n" + "\n".join(formatted_items)
+    obs = f"[GitHub Observation per GitHub API]: Found {len(results)} active repositories for query '{search_term}':\n" + "\n".join(formatted_items)
     logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
     return obs

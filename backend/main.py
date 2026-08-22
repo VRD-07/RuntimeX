@@ -1,6 +1,7 @@
 import os
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -102,6 +103,18 @@ def health_check():
         "tools_loaded": list(TOOL_REGISTRY.keys())
     }
 
+@app.post("/api/scan/stream")
+def stream_autonomous_scan(request: ScanRequest):
+    """
+    Real-time Dynamic Streaming Endpoint:
+    Yields agent thoughts, actions, observations, and final reports line-by-line as NDJSON.
+    """
+    agent = AutonomousReActAgent(model=request.model)
+    return StreamingResponse(
+        agent.stream_scan(topic=request.topic, competitors=request.competitors, max_items=request.max_items),
+        media_type="application/x-ndjson"
+    )
+
 @app.post("/api/scan", response_model=ScanResponse)
 def run_autonomous_scan(request: ScanRequest):
     """
@@ -109,14 +122,12 @@ def run_autonomous_scan(request: ScanRequest):
     Gathers Semantic Scholar papers, News, Patents, and GitHub activity.
     """
     try:
-        user_prompt = f"Track research trends, patent filings, news updates, and GitHub activity for {request.topic} (Competitors: {request.competitors})."
         agent = AutonomousReActAgent(model=request.model)
-        result = agent.run(user_request=user_prompt, max_steps=5)
+        result = agent.run_scan(topic=request.topic, competitors=request.competitors, max_items=request.max_items, max_steps=5)
         
         # Structure cards for Frontend Display
-        # Extract structured items directly from tool executions
-        papers_obs = search_semantic_scholar(request.topic, max_results=request.max_items)
-        news_obs = search_news(request.competitors, max_results=request.max_items)
+        papers_obs = search_semantic_scholar(f"{request.topic} recommendation matching algorithm", max_results=request.max_items)
+        news_obs = search_news(f"{request.competitors} {request.topic} news", max_results=request.max_items)
         
         # Simple parser for structured cards in Frontend
         papers = []

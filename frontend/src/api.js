@@ -12,6 +12,55 @@ export async function checkHealth() {
   }
 }
 
+export async function runScanStream(topic, competitors, maxItems = 5, model = 'claude-3-5-sonnet', onChunk) {
+  const res = await fetch(`${API_BASE_URL}/api/scan/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      topic,
+      competitors,
+      max_items: maxItems,
+      model
+    })
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ detail: 'Stream request failed' }));
+    throw new Error(errorData.detail || 'Stream failed');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (line.trim()) {
+        try {
+          const chunk = JSON.parse(line);
+          if (onChunk) onChunk(chunk);
+        } catch (e) {
+          console.error('NDJSON parse error:', e);
+        }
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    try {
+      const chunk = JSON.parse(buffer);
+      if (onChunk) onChunk(chunk);
+    } catch (e) {}
+  }
+}
+
 export async function runScan(topic, competitors, maxItems = 5, model = 'claude-3-5-sonnet') {
   const res = await fetch(`${API_BASE_URL}/api/scan`, {
     method: 'POST',
