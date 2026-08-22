@@ -99,7 +99,7 @@ npm run dev
 
 *(Replace the placeholder links below with actual paths to your screenshots)*
 
-![Dashboard View](./screenshots/dashboard.png)
+![Dashboard View](./dashboard.png)
 *IntelPulse AI Dashboard showcasing the Interactive Analyst and Bento Grid.*
 
 ---
