@@ -9,10 +9,13 @@ logger = logging.getLogger(__name__)
 def search_semantic_scholar(query: str, max_results: int = 5) -> str:
     """
     Finds recent academic papers, citation counts, and influential works on a research topic.
-    Returns formatted observation string.
+    Returns formatted observation string with explicit error logging.
     """
     clean_query = query.strip()
     papers = []
+    error_msg = None
+    
+    logger.info(f"--- [TOOL CALL] search_semantic_scholar(query='{clean_query}') ---")
     
     # 1. Attempt Semantic Scholar Graph API
     try:
@@ -20,9 +23,12 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
         headers = {"User-Agent": "IntelPulse-Autonomous-Agent/1.0"}
         with httpx.Client(timeout=10.0) as client:
             response = client.get(url, headers=headers)
+            logger.info(f"[Semantic Scholar API Status]: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
-                for item in data.get("data", []):
+                raw_items = data.get("data", [])
+                logger.info(f"[Semantic Scholar Raw Response Items]: {len(raw_items)}")
+                for item in raw_items:
                     papers.append({
                         "title": item.get("title"),
                         "authors": [a.get("name") for a in item.get("authors", [])[:3]],
@@ -33,10 +39,13 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
                         "url": item.get("url", "#"),
                         "source": "Semantic Scholar"
                     })
+            else:
+                error_msg = f"HTTP {response.status_code} - {response.text[:150]}"
     except Exception as e:
-        logger.warning(f"Semantic Scholar API notice: {e}. Falling back to ArXiv API.")
+        error_msg = f"API Error: {str(e)}"
+        logger.warning(f"Semantic Scholar API notice: {error_msg}. Falling back to ArXiv API.")
 
-    # 2. ArXiv Fallback if Semantic Scholar yields no results or times out
+    # 2. ArXiv Fallback if Semantic Scholar yields no results or errors
     if not papers:
         try:
             search = arxiv.Search(
@@ -46,7 +55,9 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
                 sort_order=arxiv.SortOrder.Descending
             )
             client = arxiv.Client()
-            for result in client.results(search):
+            results = list(client.results(search))
+            logger.info(f"[ArXiv Fallback Raw Response Items]: {len(results)}")
+            for result in results:
                 papers.append({
                     "title": result.title,
                     "authors": [a.name for a in result.authors[:3]],
@@ -59,9 +70,15 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
                 })
         except Exception as e:
             logger.error(f"Error fetching ArXiv papers: {e}")
+            if not error_msg:
+                error_msg = f"ArXiv Error: {str(e)}"
 
     if not papers:
-        return f"[Semantic Scholar Observation]: No academic papers found for '{clean_query}'."
+        msg = f"No results returned by Semantic Scholar for query: '{clean_query}'"
+        if error_msg:
+            msg += f" (Error details: {error_msg})"
+        logger.info(f"[TOOL RAW RESULT]: {msg}")
+        return f"[Semantic Scholar Observation]: {msg}"
 
     formatted_items = []
     for p in papers:
@@ -72,4 +89,6 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> str:
             f"  URL: {p['url']}"
         )
 
-    return f"[Semantic Scholar Observation per {papers[0]['source']}]: Found {len(papers)} academic publications for '{clean_query}':\n" + "\n".join(formatted_items)
+    obs = f"[Semantic Scholar Observation per {papers[0]['source']}]: Found {len(papers)} academic publications for query '{clean_query}':\n" + "\n".join(formatted_items)
+    logger.info(f"[TOOL RAW RESULT]: {obs[:300]}...")
+    return obs

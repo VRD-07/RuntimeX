@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import AgentDebugView from './debug/AgentDebugView';
 import { checkHealth, runScan, sendChatMessage } from './api';
 import { 
   Zap, 
@@ -17,6 +18,11 @@ import {
 } from 'lucide-react';
 
 export default function App() {
+  // Minimal Route Entry for Standalone Debug View (/debug/agent)
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/debug')) {
+    return <AgentDebugView />;
+  }
+
   // State
   const [topic, setTopic] = useState('Dating Apps');
   const [competitors, setCompetitors] = useState('Tinder, Bumble');

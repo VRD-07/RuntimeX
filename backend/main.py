@@ -19,14 +19,35 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# CORS configuration for independent React frontend integration
+# CORS Configuration - Explicit origins for local development & Vercel deployment
+raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
+origins_list = [o.strip().rstrip("/") for o in raw_allowed_origins.split(",") if o.strip()]
+
+default_explicit_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+# Combine explicit default local origins + env-configured Vercel origins
+explicit_cors_origins = list(dict.fromkeys(default_explicit_origins + origins_list))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=explicit_cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
 )
+
+@app.on_event("startup")
+def log_cors_configuration():
+    import logging
+    logger = logging.getLogger("uvicorn")
+    logger.info(f"[CORS STARTUP LOG] Configured Explicit Allowed Origins: {explicit_cors_origins}")
+    logger.info("[CORS STARTUP LOG] Configured Allowed Origin Regex: https://.*\\.vercel\\.app")
 
 # Pydantic Schemas
 class ScanRequest(BaseModel):

@@ -1,6 +1,9 @@
 # Environment files
 .env
 *.env
+.env.local
+*.env.local
+.env.*.local
 
 # Python bytecode & cache
 __pycache__/
@@ -8,13 +11,12 @@ __pycache__/
 *$py.class
 .pytest_cache/
 
-# Streamlit config
-.streamlit/secrets.toml
+# Node modules & build outputs
+frontend/node_modules
+dist
+build
 
 # Virtualenv
 venv/
 env/
 ENV/
-
-frontend/node_modules
-

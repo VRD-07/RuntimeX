@@ -17,24 +17,23 @@ SYSTEM_PROMPT = """You are an autonomous research and competitor tracking agent.
 
 REASONING FORMAT (follow this strictly for every step):
 Thought: explain what you need to find out and why, before acting.
-Action: call exactly one tool with specific, well-formed arguments. Example format: Action: search_news("dating apps Tinder")
+Action: call exactly one tool with specific, well-formed arguments. Example format: Action: search_patents("automated matching algorithm patent")
 Observation: [this will be filled in automatically with the tool's real result]
 ...repeat Thought/Action/Observation as needed...
 Final Answer: a synthesized, cited summary once you have enough information.
 
 AVAILABLE TOOLS:
-- search_semantic_scholar(query): finds recent academic papers, citation counts, and influential works on a research topic.
-- search_patents(query): searches USPTO patent filings for a topic or company/inventor name.
-- search_news(query): finds recent news articles on a company, product, or industry trend.
-- search_github(query): finds active repositories and recent activity related to a technology or organization.
+- search_semantic_scholar(query): finds recent academic papers, citation counts, and influential works on a research topic. Pass concise 2-4 word queries (e.g. search_semantic_scholar("dating preference algorithm")).
+- search_patents(query): searches USPTO patent filings for a topic or company name. Pass concise queries (e.g. search_patents("Match Group dating patent")).
+- search_news(query): finds recent news articles on a company, product, or industry trend (e.g. search_news("Tinder Bumble news")).
+- search_github(query): finds active repositories and recent activity related to a technology (e.g. search_github("dating recommendation engine")).
 
 CRITICAL GROUNDING RULES — these override anything else:
-1. NEVER state a specific fact (a paper title, patent number, date, statistic, company claim, or news event) unless it came from a tool Observation in this conversation. If you did not call a tool for it, you do not know it — say so instead of guessing.
-2. If a tool returns no results or an error, say that plainly in your next Thought. Do not invent a plausible-sounding result to fill the gap.
-3. Every claim in your Final Answer must be traceable to a specific Observation. Cite the source name (e.g. "per Semantic Scholar" / "per PatentsView") and, if available, a date or link, right next to the claim it supports.
-4. If your own training knowledge disagrees with what a tool just returned, trust the tool — it is current; your training data is not.
-5. Prefer calling a second tool to verify or add context over answering with a single thin result, especially for competitor claims — cross-check news against patents or papers where relevant.
-6. Stop and give a Final Answer once you have enough grounded information to fully address the user's request — do not call tools unnecessarily, but do not stop early with incomplete information either.
+1. QUERY CONSTRUCT RULE: Never pass raw user prompt boilerplate, instructions, or long phrases to tool calls. Form clean, concise, 2-5 word focused queries relevant to that specific tool.
+2. CONCRETE ENTITY MANDATE: Every bullet point in your Final Answer MUST cite at least one concrete named entity, date, paper title, patent title/number, repository name, or URL pulled directly from an Observation in this conversation. Generic sentences with no specific facts (e.g. "highlights product iteration and strategic positioning") are STRICTLY FORBIDDEN and treated as a failure state.
+3. INSUFFICIENT DATA RULE: If a tool call returned no results or fewer than 2 concrete facts for a section, output "Insufficient data retrieved for this section" for that section instead of generating filler prose.
+4. ERROR HONESTY: If a tool returns no results or an error, state that plainly in your next Thought and in the Final Answer. Do NOT invent plausible-sounding results.
+5. CITATION MANDATE: Every claim in your Final Answer must cite the source name (e.g. "per Semantic Scholar" / "per PatentsView" / "per Web News" / "per GitHub API") and link/date right next to the claim.
 """
 
 TOOL_REGISTRY = {
@@ -73,12 +72,14 @@ class AutonomousReActAgent:
         final_answer = ""
 
         for step in range(max_steps):
-            logger.info(f"ReAct Loop Step {step+1}/{max_steps}")
+            logger.info(f"--- ReAct Step {step+1}/{max_steps} ---")
             response_text = self._call_llm(messages)
             
             if not response_text:
                 logger.warning("Empty response from LLM, falling back.")
                 return self._run_fallback_loop(user_request)
+
+            logger.info(f"[LLM RAW RESPONSE]:\n{response_text}")
 
             # Check if Final Answer is reached
             if "Final Answer:" in response_text:
@@ -86,7 +87,7 @@ class AutonomousReActAgent:
                 thought_part = parts[0].strip()
                 final_answer = parts[1].strip()
                 if thought_part:
-                    trace.append({"step": step + 1, "thought": thought_part, "action": "None", "observation": "Completed"})
+                    trace.append({"step": step + 1, "thought": thought_part, "action": "None", "observation": "Final Answer Generated"})
                 break
 
             # Parse Thought and Action
@@ -99,16 +100,19 @@ class AutonomousReActAgent:
                 tool_name = action_match.group(1).strip()
                 raw_arg = action_match.group(2).strip().strip('"\'')
 
+                # Clean query construction rule check
+                clean_query = self._sanitize_tool_query(raw_arg)
+
                 if tool_name in TOOL_REGISTRY:
-                    logger.info(f"Executing Tool: {tool_name}('{raw_arg}')")
-                    observation = TOOL_REGISTRY[tool_name](raw_arg)
+                    logger.info(f"Executing Tool: {tool_name}('{clean_query}')")
+                    observation = TOOL_REGISTRY[tool_name](clean_query)
                 else:
-                    observation = f"[Error]: Tool '{tool_name}' is not recognized. Available tools: {list(TOOL_REGISTRY.keys())}"
+                    observation = f"[Error]: Tool '{tool_name}' not recognized. Available tools: {list(TOOL_REGISTRY.keys())}"
 
                 step_record = {
                     "step": step + 1,
                     "thought": thought_str,
-                    "action": f"{tool_name}(\"{raw_arg}\")",
+                    "action": f"{tool_name}(\"{clean_query}\")",
                     "observation": observation
                 }
                 trace.append(step_record)
@@ -117,8 +121,7 @@ class AutonomousReActAgent:
                 messages.append({"role": "assistant", "content": response_text})
                 messages.append({"role": "user", "content": f"Observation: {observation}"})
             else:
-                # If no clear action found, record thought and stop
-                trace.append({"step": step + 1, "thought": thought_str, "action": "None", "observation": "Final answer reached."})
+                trace.append({"step": step + 1, "thought": thought_str, "action": "None", "observation": "Completed"})
                 final_answer = response_text.replace("Thought:", "").strip()
                 break
 
@@ -133,6 +136,13 @@ class AutonomousReActAgent:
             "final_answer": final_answer,
             "agentrouter_active": True
         }
+
+    def _sanitize_tool_query(self, query: str) -> str:
+        """Strips out boilerplate user instructions and keeps concise, focused search terms."""
+        cleaned = re.sub(r"(?i)(track|research|patents?|news|github|activity|for|and|recent|trends?|filings?|articles?|repositories|find|search|get|show|me)", "", query)
+        cleaned = re.sub(r"[^\w\s]", " ", cleaned).strip()
+        words = [w for w in cleaned.split() if len(w) > 1]
+        return " ".join(words[:3]) if words else "Dating Apps"
 
     def _call_llm(self, messages: List[Dict[str, str]]) -> Optional[str]:
         headers = {
@@ -165,68 +175,59 @@ class AutonomousReActAgent:
 
     def _run_fallback_loop(self, user_request: str) -> Dict[str, Any]:
         """
-        Executes a deterministic grounded ReAct trace using the 4 tools 
+        Executes a deterministic grounded ReAct trace using clean, focused tool queries
         when running offline or without an API key.
         """
-        # Clean query extraction
-        clean = re.sub(r"(?i)(track|research|patents?|news|github|activity|for|and|recent|trends?|filings?|articles?|repositories)", "", user_request)
-        clean = re.sub(r"[^\w\s]", " ", clean).strip()
-        query = clean if len(clean) > 2 else "Dating Apps Tinder Bumble"
+        domain_query = self._sanitize_tool_query(user_request) or "Dating Apps"
         
-        # Step 1: Search News
-        obs1 = search_news(query)
+        # 1. News Tool Call (Focused on Market/Competitors)
+        news_query = f"{domain_query} news"
+        obs1 = search_news(news_query)
         trace1 = {
             "step": 1,
-            "thought": f"I need to gather recent news and competitor signals regarding '{query}' to identify major market updates.",
-            "action": f"search_news(\"{query}\")",
+            "thought": f"I need to query news articles for '{news_query}' to identify concrete company announcements and dates.",
+            "action": f"search_news(\"{news_query}\")",
             "observation": obs1
         }
 
-        # Step 2: Search Academic Papers
-        obs2 = search_semantic_scholar(query)
+        # 2. Semantic Scholar Tool Call (Focused on Academic Literature)
+        paper_query = f"{domain_query} recommendation algorithm"
+        obs2 = search_semantic_scholar(paper_query)
         trace2 = {
             "step": 2,
-            "thought": f"Now I need to cross-check market claims against academic research papers to find underlying algorithmic developments in '{query}'.",
-            "action": f"search_semantic_scholar(\"{query}\")",
+            "thought": f"Now I need to search academic publications for '{paper_query}' to extract concrete paper titles and authors.",
+            "action": f"search_semantic_scholar(\"{paper_query}\")",
             "observation": obs2
         }
 
-        # Step 3: Search Patents
-        obs3 = search_patents(query)
+        # 3. Patent Tool Call (Focused on IP & USPTO Filings)
+        patent_query = f"{domain_query} patent"
+        obs3 = search_patents(patent_query)
         trace3 = {
             "step": 3,
-            "thought": f"Next I will inspect USPTO patent filings for '{query}' to identify IP claims and technical innovations.",
-            "action": f"search_patents(\"{query}\")",
+            "thought": f"Next I will search USPTO patent filings for '{patent_query}' to identify patent titles and technical claims.",
+            "action": f"search_patents(\"{patent_query}\")",
             "observation": obs3
         }
 
-        # Step 4: Search GitHub
-        obs4 = search_github(query)
+        # 4. GitHub Tool Call (Focused on Tech Stack & Repositories)
+        github_query = f"{domain_query} recommendation"
+        obs4 = search_github(github_query)
         trace4 = {
             "step": 4,
-            "thought": f"Finally I will search GitHub for active open-source repositories and technical frameworks related to '{query}'.",
-            "action": f"search_github(\"{query}\")",
+            "thought": f"Finally I will query GitHub for '{github_query}' to identify open-source repositories and stars.",
+            "action": f"search_github(\"{github_query}\")",
             "observation": obs4
         }
 
-        final_answer = f"""# GROUNDED RESEARCH & COMPETITOR INTELLIGENCE SUMMARY
-
-## 1. MARKET NEWS & COMPETITOR SIGNALS
-- Grounded per Web News: Recent updates highlight product iteration and strategic market positioning for {query}.
-- Citation: {obs1.splitlines()[1] if len(obs1.splitlines()) > 1 else 'per Web News'}
-
-## 2. ACADEMIC RESEARCH & ALGORITHMIC TRENDS
-- Grounded per Semantic Scholar / ArXiv: Research literature focuses on preference optimization, recommendation models, and user privacy.
-- Citation: {obs2.splitlines()[1] if len(obs2.splitlines()) > 1 else 'per Semantic Scholar'}
-
-## 3. PATENT FILINGS & INTELLECTUAL PROPERTY
-- Grounded per USPTO / PatentsView: Patent documents indicate claims around automated matching protocols and real-time user behavior analysis.
-- Citation: {obs3.splitlines()[1] if len(obs3.splitlines()) > 1 else 'per PatentsView'}
-
-## 4. GITHUB TECHNICAL ACTIVITY
-- Grounded per GitHub API: Active open-source repositories provide reference implementations for recommendation engines and matching algorithms.
-- Citation: {obs4.splitlines()[1] if len(obs4.splitlines()) > 1 else 'per GitHub API'}
-"""
+        # Process Observations & Format Final Answer according to Grounding Rules
+        final_answer = self._synthesize_grounded_fallback_report(
+            obs_news=obs1,
+            obs_papers=obs2,
+            obs_patents=obs3,
+            obs_github=obs4,
+            domain=domain_query
+        )
 
         return {
             "status": "success",
@@ -236,3 +237,81 @@ class AutonomousReActAgent:
             "final_answer": final_answer,
             "agentrouter_active": False
         }
+
+    def _synthesize_grounded_fallback_report(self, obs_news: str, obs_papers: str, obs_patents: str, obs_github: str, domain: str) -> str:
+        """Synthesizes strictly grounded final report with concrete entities or outputs Insufficient Data."""
+        
+        # Parse News Facts
+        news_facts = []
+        if "No results returned" not in obs_news:
+            for line in obs_news.splitlines():
+                if line.startswith("- Title:"):
+                    news_facts.append(line.replace("- Title: ", "").strip())
+        
+        # Parse Paper Facts
+        paper_facts = []
+        if "No results returned" not in obs_papers:
+            for line in obs_papers.splitlines():
+                if line.startswith("- Title:"):
+                    paper_facts.append(line.replace("- Title: ", "").strip())
+
+        # Parse Patent Facts
+        patent_facts = []
+        if "No results returned" not in obs_patents:
+            for line in obs_patents.splitlines():
+                if line.startswith("- Title:"):
+                    patent_facts.append(line.replace("- Title: ", "").strip())
+
+        # Parse GitHub Facts
+        github_facts = []
+        if "No results returned" not in obs_github:
+            for line in obs_github.splitlines():
+                if line.startswith("- Repo:"):
+                    github_facts.append(line.replace("- Repo: ", "").strip())
+
+        # Build Section 1: News
+        if len(news_facts) >= 2:
+            sec1 = f"- Grounded Headline 1: **{news_facts[0]}** (per Web News)\n- Grounded Headline 2: **{news_facts[1]}** (per Web News)"
+        elif len(news_facts) == 1:
+            sec1 = f"- Grounded Headline: **{news_facts[0]}** (per Web News)"
+        else:
+            sec1 = "Insufficient data retrieved for this section (per Web News: 0 articles found)."
+
+        # Build Section 2: Papers
+        if len(paper_facts) >= 2:
+            sec2 = f"- Publication 1: **{paper_facts[0]}** (per Semantic Scholar)\n- Publication 2: **{paper_facts[1]}** (per Semantic Scholar)"
+        elif len(paper_facts) == 1:
+            sec2 = f"- Publication: **{paper_facts[0]}** (per Semantic Scholar)"
+        else:
+            sec2 = "Insufficient data retrieved for this section (per Semantic Scholar: 0 papers found)."
+
+        # Build Section 3: Patents
+        if len(patent_facts) >= 2:
+            sec3 = f"- Patent Record 1: **{patent_facts[0]}** (per PatentsView / Google Patents)\n- Patent Record 2: **{patent_facts[1]}** (per PatentsView / Google Patents)"
+        elif len(patent_facts) == 1:
+            sec3 = f"- Patent Record: **{patent_facts[0]}** (per PatentsView / Google Patents)"
+        else:
+            sec3 = "Insufficient data retrieved for this section (per PatentsView: 0 patents found)."
+
+        # Build Section 4: GitHub
+        if len(github_facts) >= 2:
+            sec4 = f"- Repository 1: **{github_facts[0]}** (per GitHub API)\n- Repository 2: **{github_facts[1]}** (per GitHub API)"
+        elif len(github_facts) == 1:
+            sec4 = f"- Repository: **{github_facts[0]}** (per GitHub API)"
+        else:
+            sec4 = "Insufficient data retrieved for this section (per GitHub API: 0 repositories found)."
+
+        return f"""# GROUNDED RESEARCH & COMPETITOR INTELLIGENCE SUMMARY: {domain.upper()}
+
+## 1. COMPETITOR NEWS & MARKET SIGNALS
+{sec1}
+
+## 2. ACADEMIC RESEARCH & ALGORITHMIC PUBLICATIONS
+{sec2}
+
+## 3. PATENT FILINGS & INTELLECTUAL PROPERTY
+{sec3}
+
+## 4. GITHUB TECHNICAL ACTIVITY & OPEN-SOURCE REPOSITORIES
+{sec4}
+"""
