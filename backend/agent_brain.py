@@ -94,6 +94,44 @@ def llm_available() -> bool:
     return GENAI_AVAILABLE and bool(os.getenv("GEMINI_API_KEY", "").strip())
 
 
+# ---------------------------------------------------------------------------
+# Token accounting
+#
+# Gemini reports usage per response. The totals are accumulated in-process so an
+# evaluation harness can read exact numbers instead of scraping logs, and
+# reset_token_usage() gives it a clean baseline per scan. Diagnostic only — no
+# request path reads these, so a missing usage_metadata degrades to a log line.
+# ---------------------------------------------------------------------------
+TOKEN_USAGE: Dict[str, int] = {"calls": 0, "prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+def reset_token_usage() -> None:
+    """Zeroes the counters. Call before a scan you intend to measure."""
+    for key in TOKEN_USAGE:
+        TOKEN_USAGE[key] = 0
+
+
+def get_token_usage() -> Dict[str, int]:
+    """Snapshot of the counters, copied so a caller cannot mutate the originals."""
+    return dict(TOKEN_USAGE)
+
+
+def _record_token_usage(response: Any, model_name: str) -> None:
+    """Logs and accumulates the token counts Gemini attached to one response."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        logger.info(f"[Gemini] Model '{model_name}' returned no usage metadata; tokens not counted.")
+        return
+    prompt = getattr(usage, "prompt_token_count", 0) or 0
+    output = getattr(usage, "candidates_token_count", 0) or 0
+    total = getattr(usage, "total_token_count", 0) or (prompt + output)
+    TOKEN_USAGE["calls"] += 1
+    TOKEN_USAGE["prompt_tokens"] += prompt
+    TOKEN_USAGE["output_tokens"] += output
+    TOKEN_USAGE["total_tokens"] += total
+    logger.info(f"[Gemini] Tokens for '{model_name}': prompt={prompt} output={output} total={total}")
+
+
 def call_gemini(prompt_content: str, system_instruction: str, model_name: str,
                 json_mode: bool = False, temperature: float = 0.2) -> Optional[str]:
     """
@@ -134,6 +172,7 @@ def call_gemini(prompt_content: str, system_instruction: str, model_name: str,
                 contents=prompt_content,
                 config=config,
             )
+            _record_token_usage(response, attempt_model)
             text = (response.text or "").strip()
             if text:
                 logger.info(f"[Gemini] Call succeeded with model '{attempt_model}' ({len(text)} chars).")
