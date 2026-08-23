@@ -38,16 +38,14 @@ Experience the platform live:
 In today’s fast-paced tech landscape, tracking competitor updates, academic breakthroughs, and market signals manually is a slow, scattered, and error-prone process. Research teams often struggle to aggregate context-aware intelligence quickly enough to make strategic decisions.
 
 **The Solution:**
-**IntelPulse AI** streamlines the research workflow by automatically tracking competitors across news, academic papers, patents, open-source activity, published-model adoption and community discussion, then synthesising the result into an executive brief you can interrogate conversationally.
+**IntelPulse AI** streamlines the research workflow by automatically tracking competitors across news, academic papers, patents, open-source activity and community discussion, then synthesising the result into an executive brief you can interrogate conversationally.
 
 ---
 
 ## ✨ Key Features
 
 *   🤖 **Autonomous Multi-Agent Scanning**: An Orchestrator dispatches a **Field Agent** (tool execution only) and an **Analyst Agent** (synthesis only), with a gap-fill round that re-queries any competitor the first pass under-covered.
-*   🔎 **Seven Live Evidence Sources**: News, academic research, patents, GitHub, Reddit, Hugging Face model traction and Hacker News — each with an official-API path and a documented public-feed fallback.
-*   🇮🇳 **India-First Patent Coverage**: Patent lookups rank Indian jurisdictions ahead of WO/EP/US and report assignee, inventor, filing date and the countries where the patent family is still **active** — not just an abstract.
-*   📈 **Adoption, Not Just Announcements**: News tells you what a competitor announced; Hugging Face download/like counts and Hacker News points/comments tell you whether it landed.
+*   🔎 **Five Live Evidence Sources**: News, academic research, patents, GitHub and Reddit — each with an official-API path and a documented public-feed fallback.
 *   🧾 **Citations You Can Trust**: Every URL, source name and date in the findings list is assembled **deterministically from real tool output**. The LLM writes prose only and never authors a link, so citations cannot be hallucinated.
 *   🧠 **Long-Term Memory**: Scans are persisted to SQLite and each new run reports the *delta* against the previous scan for the same competitor and topic.
 *   💬 **Grounded AI Analyst**: The follow-up chat receives the findings currently on screen as context, so answers cite what was actually retrieved.
@@ -64,11 +62,8 @@ POST /api/scan/stream
         ▼
 OrchestratorAgent ──► memory recall (SQLite: prior scan for this competitor + topic)
         │
-        ├──► FieldAgent  pass 1   news → patents → github → research
-        │                          → model hub → reddit → hacker news
+        ├──► FieldAgent  pass 1   news → research → patents → github → reddit
         │        (tools only; each step streamed as step_start / step_complete)
-        │        topic-level calls run first so a tight max_steps loses depth,
-        │        not whole source categories
         │
         ├──► build_sections()      dedup on (source_type, url, title); real metadata only
         ├──► compute_gap_report()  per-competitor item counts, deterministic
@@ -83,8 +78,6 @@ Two invariants worth knowing before you modify the backend:
 
 1. **The LLM never produces structured findings.** `structured_output.sections` comes from `build_sections()`. If you move citation generation into the prompt, you reintroduce fabricated URLs.
 2. **`gap_report` is computed, not generated**, so entity names always match the requested competitor list and can be fed straight back into gap-fill queries.
-3. **A new source has to be registered in six places.** `SECTION_ORDER` and `SECTION_RESPONSE_KEYS` in `backend/agent_brain.py`, `TOOL_REGISTRY`, the `ScanResponse` model and `ChatRequest` in `backend/main.py`, `sendChatMessage` in `frontend/src/api.js`, and `SOURCE_TYPES` in `frontend/src/App.jsx`. `SECTION_RESPONSE_KEYS` exists specifically so the flat response arrays are derived from one map — a source added to `SECTION_ORDER` alone used to be silently dropped from the API response.
-4. **An unavailable source is never reported as an empty one.** A rate-limited or blocked upstream says so in the observation text. Reporting "no patents found" when the request was actually blocked would turn an access failure into a false claim about a competitor's IP position.
 
 The backend also degrades rather than crashes: if `google-genai` is not installed or `GEMINI_API_KEY` is unset, tools still run and a deterministic rule-based analyst produces the summary. `llm_active` in the response tells you which path ran.
 
@@ -97,7 +90,7 @@ The backend also degrades rather than crashes: if `google-genai` is not installe
 | **Frontend** | React.js, Vite, Tailwind CSS, Framer Motion, Aceternity UI, Lucide React, Recharts |
 | **Backend** | Python, FastAPI, Uvicorn, Pydantic v2, httpx, SQLite |
 | **AI & NLU** | Google Gemini 2.5 Flash / Pro via the `google-genai` SDK |
-| **Data Sources** | NewsAPI · GNews · Google News RSS · Semantic Scholar · arXiv · EPO OPS · Google Patents · GitHub REST · Reddit RSS · Hugging Face Hub · Hacker News (Algolia) |
+| **Data Sources** | NewsAPI · GNews · Google News RSS · Semantic Scholar · arXiv · PatentsView · GitHub REST · Reddit RSS |
 
 ---
 
@@ -149,9 +142,7 @@ All backend variables live in `backend/.env`. Only the first one is required.
 | `NEWS_API_KEY` | No | — | NewsAPI.org. Falls back to GNews, then Google News RSS |
 | `GNEWS_API_KEY` | No | — | GNews, the second news path |
 | `SEMANTIC_SCHOLAR_API_KEY` | No | — | Raises the Semantic Scholar rate limit; arXiv is the fallback |
-| `EPO_OPS_KEY` | No | — | EPO Open Patent Services consumer key. **The only official patent API still reachable that indexes Indian publications.** Without it, patents degrade to keyless tiers. [Free registration](https://developers.epo.org) |
-| `EPO_OPS_SECRET` | No | — | The matching OPS consumer secret. Both are needed together |
-| `HF_TOKEN` | No | — | Raises the Hugging Face rate limit and exposes gated repos. Model traction works fully without it |
+| `PATENTSVIEW_API_KEY` | No | — | PatentsView Search API. Without it, patent lookups use a labelled Google Patents web search. [Free key](https://patentsview.org/apis/keyrequest) |
 | `MEMORY_DB_PATH` | No | `backend/intelpulse_memory.db` | Absolute path for the SQLite memory DB. **Set this to a mounted persistent disk in production** — see the deployment note below |
 | `PORT` | No | `8000` | Server port |
 | `HOST` | No | `0.0.0.0` | Bind address |
@@ -187,27 +178,17 @@ Root Directory `frontend`, framework preset **Vite**, and one environment variab
 
 ## 🧪 Tests
 
-One test is offline; the other two require network access.
-
-```bash
-cd backend && python test_patent_parsers.py
-```
-**Offline.** Exercises the EPO OPS and Google Patents response parsers against fixtures that reproduce the real response shapes — OPS's `{"$": value}` wrappers and bare-object-vs-list ambiguity, Google's routed `patent/XX…/en` ids and placeholder Indian titles. This exists because every keyless patent endpoint now throttles, so a live test proves only that the network refused us.
+Both scripts hit live APIs and require network access:
 
 ```bash
 cd backend && python test_audit_tools.py
 ```
-**Live.** Contract smoke test across all seven tools — asserts each returns `{"text", "items", "source_type"}` with fully-populated item metadata, and that every `SECTION_ORDER` source type is covered. Exits non-zero on a violation.
+Contract smoke test across all five tools — asserts each returns `{"text", "items", "source_type"}` with fully-populated item metadata, and exits non-zero on a violation.
 
 ```bash
 cd backend && python test_standalone_queries.py
 ```
-**Live.** Query-coverage probe — runs several real phrasings per tool and reports how much evidence each returns.
-
-```bash
-cd backend && python verify_e2e.py http://127.0.0.1:8000
-```
-**Live, needs a running server.** End-to-end contract check: drives `/api/scan/stream` the way the browser does, then asserts the NDJSON parses line by line, every `step_start` is paired with a `step_complete`, every source type reaches `structured_output.sections`, each section matches its flat array, every finding carries a real `http(s)` URL, and `/api/chat` accepts the new `context_*` arrays.
+Query-coverage probe — runs several real phrasings per tool and reports how much evidence each returns.
 
 ---
 
@@ -227,3 +208,9 @@ Built with ❤️ by the IntelPulse Team:
 *   **Sharvari Kolte**
 *   **Shubham Khose**
 *   **Aditya Ugale**
+
+---
+
+## Project Update
+
+Latest project updates and documentation.
