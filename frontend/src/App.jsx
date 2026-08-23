@@ -70,6 +70,31 @@ const SOURCE_RESPONSE_KEYS = {
   hackernews: 'hn_posts'
 };
 
+// How many cards each competitor group shows before the "show all" expander.
+const GROUP_PREVIEW_COUNT = 4;
+
+// Turns "search_news(query='Sarvam AI funding')" into "search_news - Sarvam AI funding"
+// so a trace step fits on one line without hiding which tool ran or on what.
+function summarizeStep(step) {
+  const action = (step.action || '').trim();
+  if (!action) return (step.thought || 'Reasoning step').slice(0, 90);
+  const match = action.match(/^([\w.]+)\s*\((.*)\)$/s);
+  if (!match) return action.slice(0, 90);
+  const tool = match[1].split('.').pop();
+  const args = match[2].replace(/\w+\s*=\s*/g, '').replace(/['"]/g, '').trim();
+  return args ? `${tool} - ${args.slice(0, 64)}` : tool;
+}
+
+// A step's role badge. Chaos steps are labelled explicitly so a deliberately
+// injected failure can never be mistaken for a real one.
+function stepBadge(step) {
+  if (step.step_type === 'chaos' || step.chaos) return { label: 'CHAOS DEMO', className: 'bg-rose-700 text-white' };
+  if (step.step_type === 'memory_recall') return { label: 'MEMORY', className: 'bg-amber-600 text-white' };
+  if (step.agent_role === 'Analyst Agent') return { label: 'ANALYST', className: 'bg-[#6E7455] text-white' };
+  if (step.agent_role === 'Orchestrator') return { label: 'ORCHESTRATOR', className: 'bg-[#8B9467] text-white' };
+  return { label: 'FIELD', className: 'bg-[#C2603A] text-white' };
+}
+
 // Custom Responsive Horizontal Bar Chart
 function CompetitorBarChart({ data }) {
   const maxCount = Math.max(...data.map(d => d.count), 1);
@@ -158,6 +183,60 @@ function SourceDonutChart({ data }) {
   );
 }
 
+// One finding card. Extracted so the grouped feed and any future view render an
+// identical card instead of two copies of this markup drifting apart.
+function FindingCard({ item, topic }) {
+  const isSpecificCompetitor = item.entity && item.entity !== 'General' && item.entity !== topic;
+  return (
+    <div
+      className={`rounded-xl p-5 flex flex-col justify-between transition-all shadow-sm ${
+        isSpecificCompetitor
+          ? 'bg-[#EAE3D2] border-2 border-[#C2603A]/70 shadow-md hover:border-[#C2603A]'
+          : 'bg-[#EAE3D2]/80 border border-[#6E7455]/30 opacity-90 hover:opacity-100'
+      }`}
+    >
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          {isSpecificCompetitor ? (
+            <span className="bg-[#C2603A] text-white font-mono font-bold px-2.5 py-0.5 rounded-md text-[11px] uppercase tracking-wider">
+              {item.entity}
+            </span>
+          ) : (
+            <span className="bg-[#6E7455]/20 text-[#6E7455] font-mono px-2 py-0.5 rounded text-[10px] font-semibold">
+              {item.entity || 'MARKET GENERAL'}
+            </span>
+          )}
+
+          <span className="text-[10px] font-mono text-[#6E7455] bg-[#DCD6BE] px-2 py-0.5 rounded border border-[#6E7455]/20">
+            {(SOURCE_LABELS[item.source_type] || item.source_type).toUpperCase()}
+          </span>
+        </div>
+
+        <h4 className="font-serif font-bold text-sm text-[#2A2723] leading-snug">
+          {item.title}
+        </h4>
+
+        <p className="text-xs text-[#2A2723]/80 leading-relaxed font-sans line-clamp-3">
+          {item.snippet}
+        </p>
+      </div>
+
+      <div className="pt-4 mt-3 border-t border-[#6E7455]/20 flex items-center justify-between font-mono text-[11px] text-[#6E7455]">
+        <span>{item.source_name} ({item.date})</span>
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center space-x-1 text-[#C2603A] hover:underline font-semibold"
+        >
+          <span>Link</span>
+          <ExternalLink className="w-3 h-3" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/debug')) {
     return <AgentDebugView />;
@@ -180,6 +259,14 @@ export default function App() {
   // Trace UI state
   const [traceExpanded, setTraceExpanded] = useState(true);
   const [staggeredStepCount, setStaggeredStepCount] = useState(0);
+  // Which individual trace steps have been opened for full detail. The trace is
+  // one line per step by default because the raw log used to be longer than the
+  // rest of the page combined.
+  const [openTraceSteps, setOpenTraceSteps] = useState({});
+
+  // Findings grid state, keyed by competitor group name.
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [expandedGroups, setExpandedGroups] = useState({});
 
   // Chat state
   const [chatMessages, setChatMessages] = useState([]);
@@ -217,6 +304,9 @@ export default function App() {
     setScanError(null);
     setLoading(true);
     setStaggeredStepCount(0);
+    setOpenTraceSteps({});
+    setCollapsedGroups({});
+    setExpandedGroups({});
 
     let dynamicTrace = [];
 
@@ -230,7 +320,8 @@ export default function App() {
             thought: chunk.thought,
             action: chunk.action,
             content: chunk.content,
-            delta: chunk.delta
+            delta: chunk.delta,
+            ts: new Date().toLocaleTimeString('en-GB')
           };
           dynamicTrace = [memStep, ...dynamicTrace.filter(s => s.step !== 0)];
           setScanResult({ trace: dynamicTrace });
@@ -246,7 +337,8 @@ export default function App() {
             agent_role: chunk.agent_role || 'Field Agent',
             thought: chunk.thought,
             action: chunk.action,
-            observation: null
+            observation: null,
+            ts: new Date().toLocaleTimeString('en-GB')
           };
           dynamicTrace = [...dynamicTrace.filter(s => s.step !== chunk.step), newStep].sort((a, b) => a.step - b.step);
           setScanResult({ trace: dynamicTrace });
@@ -256,7 +348,13 @@ export default function App() {
             agent_role: chunk.agent_role || 'Field Agent',
             thought: chunk.thought,
             action: chunk.action,
-            observation: chunk.observation
+            observation: chunk.observation,
+            step_type: chunk.step_type,
+            chaos: chunk.chaos,
+            // Preserve the start timestamp so the row does not jump to the
+            // completion time once the observation lands.
+            ts: (dynamicTrace.find(s => s.step === chunk.step) || {}).ts
+              || new Date().toLocaleTimeString('en-GB')
           };
           dynamicTrace = [...dynamicTrace.filter(s => s.step !== chunk.step), updatedStep].sort((a, b) => a.step - b.step);
           setScanResult({ trace: dynamicTrace });
@@ -384,6 +482,31 @@ export default function App() {
       return matchComp && matchSource;
     });
   }, [allFindings, competitorFilter, sourceFilter]);
+
+  // Groups the flat feed by competitor. ~35 undifferentiated cards is not
+  // readable; ordering follows the competitor input so the groups appear in the
+  // order the user typed them, with unattributed market signals last.
+  const findingGroups = React.useMemo(() => {
+    const order = competitors.split(',').map(c => c.trim()).filter(Boolean);
+    const buckets = new Map();
+
+    filteredFindings.forEach(item => {
+      const entity = (item.entity || 'General').trim() || 'General';
+      const matched = order.find(c => entity.toLowerCase().includes(c.toLowerCase()));
+      const key = matched || (entity === 'General' ? 'Market General' : entity);
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(item);
+    });
+
+    const ranked = [...buckets.entries()].sort(([a], [b]) => {
+      const ai = order.findIndex(c => c === a);
+      const bi = order.findIndex(c => c === b);
+      // Named competitors keep input order; anything unattributed sinks to the bottom.
+      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    });
+
+    return ranked.map(([name, items]) => ({ name, items, isCompetitor: order.includes(name) }));
+  }, [filteredFindings, competitors]);
 
   const competitorChartData = React.useMemo(() => {
     const comps = competitors.split(',').map(c => c.trim()).filter(Boolean);
@@ -745,58 +868,64 @@ export default function App() {
               ))}
             </div>
 
-            {/* Filtered Grid Cards */}
-            {filteredFindings.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredFindings.map((item) => {
-                  const isSpecificCompetitor = item.entity && item.entity !== 'General' && item.entity !== topic;
+            {/* Grouped by competitor, top few per group, expander for the rest */}
+            {findingGroups.length > 0 ? (
+              <div className="space-y-4">
+                {findingGroups.map((group) => {
+                  const isCollapsed = !!collapsedGroups[group.name];
+                  const showAll = !!expandedGroups[group.name];
+                  const visible = showAll ? group.items : group.items.slice(0, GROUP_PREVIEW_COUNT);
+                  const hidden = group.items.length - visible.length;
+
                   return (
                     <div
-                      key={item.id}
-                      className={`rounded-xl p-5 flex flex-col justify-between transition-all shadow-sm ${
-                        isSpecificCompetitor
-                          ? 'bg-[#EAE3D2] border-2 border-[#C2603A]/70 shadow-md hover:border-[#C2603A]'
-                          : 'bg-[#EAE3D2]/80 border border-[#6E7455]/30 opacity-90 hover:opacity-100'
+                      key={group.name}
+                      className={`rounded-xl border overflow-hidden ${
+                        group.isCompetitor
+                          ? 'border-[#C2603A]/40 bg-[#EAE3D2]/50'
+                          : 'border-[#6E7455]/30 bg-[#EAE3D2]/30'
                       }`}
                     >
-                      <div className="space-y-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          {isSpecificCompetitor ? (
-                            <span className="bg-[#C2603A] text-white font-mono font-bold px-2.5 py-0.5 rounded-md text-[11px] uppercase tracking-wider">
-                              {item.entity}
-                            </span>
+                      <button
+                        onClick={() => setCollapsedGroups(prev => ({ ...prev, [group.name]: !prev[group.name] }))}
+                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#EAE3D2] transition-colors text-left"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          {group.isCompetitor ? (
+                            <Building2 className="w-4 h-4 text-[#C2603A]" />
                           ) : (
-                            <span className="bg-[#6E7455]/20 text-[#6E7455] font-mono px-2 py-0.5 rounded text-[10px] font-semibold">
-                              {item.entity || 'MARKET GENERAL'}
-                            </span>
+                            <Newspaper className="w-4 h-4 text-[#6E7455]" />
                           )}
-
-                          <span className="text-[10px] font-mono text-[#6E7455] bg-[#DCD6BE] px-2 py-0.5 rounded border border-[#6E7455]/20">
-                            {(SOURCE_LABELS[item.source_type] || item.source_type).toUpperCase()}
+                          <span className="font-serif font-bold text-sm text-[#2A2723]">{group.name}</span>
+                          <span className="font-mono text-[10px] bg-[#DCD6BE] text-[#6E7455] px-2 py-0.5 rounded-full border border-[#6E7455]/25">
+                            {group.items.length} signals
                           </span>
                         </div>
+                        {isCollapsed
+                          ? <ChevronDown className="w-4 h-4 text-[#6E7455]" />
+                          : <ChevronUp className="w-4 h-4 text-[#C2603A]" />}
+                      </button>
 
-                        <h4 className="font-serif font-bold text-sm text-[#2A2723] leading-snug">
-                          {item.title}
-                        </h4>
+                      {!isCollapsed && (
+                        <div className="px-4 pb-4 space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {visible.map(item => (
+                              <FindingCard key={item.id} item={item} topic={topic} />
+                            ))}
+                          </div>
 
-                        <p className="text-xs text-[#2A2723]/80 leading-relaxed font-sans line-clamp-3">
-                          {item.snippet}
-                        </p>
-                      </div>
-
-                      <div className="pt-4 mt-3 border-t border-[#6E7455]/20 flex items-center justify-between font-mono text-[11px] text-[#6E7455]">
-                        <span>{item.source_name} ({item.date})</span>
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center space-x-1 text-[#C2603A] hover:underline font-semibold"
-                        >
-                          <span>Link</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
+                          {group.items.length > GROUP_PREVIEW_COUNT && (
+                            <button
+                              onClick={() => setExpandedGroups(prev => ({ ...prev, [group.name]: !prev[group.name] }))}
+                              className="w-full py-2 rounded-lg border border-dashed border-[#6E7455]/40 font-mono text-[11px] text-[#6E7455] hover:text-[#C2603A] hover:border-[#C2603A]/50 transition-colors flex items-center justify-center gap-1.5"
+                            >
+                              {showAll
+                                ? <>Show top {GROUP_PREVIEW_COUNT} only <ChevronUp className="w-3 h-3" /></>
+                                : <>Show all {group.items.length} ({hidden} more) <ChevronDown className="w-3 h-3" /></>}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -832,62 +961,68 @@ export default function App() {
             </button>
 
             {traceExpanded && (
-              <div className="p-6 space-y-4 bg-[#2A2723]">
+              <div className="bg-[#2A2723]">
                 {scanResult?.trace?.length > 0 ? (
-                  <div className="space-y-4">
-                    {scanResult.trace.slice(0, staggeredStepCount).map((step, idx) => (
-                      <div
-                        key={idx}
-                        className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 space-y-2 text-xs font-mono transition-all"
-                      >
-                        <div className="flex items-center justify-between border-b border-[#6E7455]/20 pb-1.5">
-                          <div className="flex items-center space-x-2">
-                            <span className="text-[#C2603A] font-bold">Step {step.step || idx + 1}</span>
-                            {step.step_type === 'memory_recall' ? (
-                              <span className="bg-amber-600 text-white px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider flex items-center gap-1">
-                                <History className="w-3 h-3" /> MEMORY RECALL
-                              </span>
-                            ) : step.agent_role === 'Analyst Agent' ? (
-                              <span className="bg-[#6E7455] text-white px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider">
-                                ANALYST AGENT
-                              </span>
-                            ) : (
-                              <span className="bg-[#C2603A] text-white px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider">
-                                FIELD AGENT
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                            ✓ Executed
-                          </span>
+                  // Capped height: the full log runs longer than the rest of the
+                  // page, so it scrolls inside its own panel instead of pushing
+                  // the analyst Q&A off screen.
+                  <div className="max-h-[420px] overflow-y-auto divide-y divide-[#6E7455]/15">
+                    {scanResult.trace.slice(0, staggeredStepCount).map((step, idx) => {
+                      const badge = stepBadge(step);
+                      const isOpen = !!openTraceSteps[idx];
+                      return (
+                        <div key={idx} className="text-xs font-mono">
+                          <button
+                            onClick={() => setOpenTraceSteps(prev => ({ ...prev, [idx]: !prev[idx] }))}
+                            className="w-full px-5 py-2 flex items-center gap-3 hover:bg-[#1F1D1A] transition-colors text-left"
+                          >
+                            {isOpen
+                              ? <ChevronUp className="w-3.5 h-3.5 text-[#C2603A] shrink-0" />
+                              : <ChevronDown className="w-3.5 h-3.5 text-[#6E7455] shrink-0" />}
+                            <span className="text-[#6E7455] w-8 shrink-0">{String(step.step ?? idx + 1).padStart(2, '0')}</span>
+                            <span className={`${badge.className} px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 w-[92px] text-center`}>
+                              {badge.label}
+                            </span>
+                            <span className="text-[#DCD6BE] truncate flex-1">{summarizeStep(step)}</span>
+                            {step.observation
+                              ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              : <RefreshCw className="w-3.5 h-3.5 text-[#6E7455] animate-spin shrink-0" />}
+                            <span className="text-[10px] text-[#6E7455] shrink-0 w-16 text-right">{step.ts || '--:--:--'}</span>
+                          </button>
+
+                          {isOpen && (
+                            <div className="px-5 pb-4 pt-1 space-y-2 bg-[#1F1D1A]">
+                              {step.thought && (
+                                <div>
+                                  <span className="text-[#DCD6BE] font-semibold">Thought: </span>
+                                  <span className="text-[#EAE3D2]">{step.thought}</span>
+                                </div>
+                              )}
+                              {step.action && (
+                                <div>
+                                  <span className="text-[#D38B5D] font-semibold">Action: </span>
+                                  <code className="bg-[#2A2723] px-2 py-0.5 rounded text-[#D38B5D] border border-[#6E7455]/30 break-all">{step.action}</code>
+                                </div>
+                              )}
+                              {step.observation && (
+                                <div>
+                                  <span className="text-sky-400 font-semibold">Observation: </span>
+                                  <pre className="mt-1 bg-[#2A2723] p-3 rounded-lg text-[#DCD6BE] overflow-auto text-[11px] whitespace-pre-wrap border border-[#6E7455]/30 max-h-56 leading-relaxed">
+                                    {step.observation}
+                                  </pre>
+                                </div>
+                              )}
+                              {step.content && (
+                                <div>
+                                  <span className="text-amber-400 font-semibold">Recall Detail: </span>
+                                  <span className="text-[#EAE3D2]">{step.content}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <div>
-                          <span className="text-[#C2603A] font-bold mr-2">&gt;</span>
-                          <span className="text-[#DCD6BE] font-semibold">Thought: </span>
-                          <span className="text-[#EAE3D2]">{step.thought}</span>
-                        </div>
-                        <div>
-                          <span className="text-[#C2603A] font-bold mr-2">&gt;</span>
-                          <span className="text-[#D38B5D] font-semibold">Action: </span>
-                          <code className="bg-[#2A2723] px-2 py-0.5 rounded text-[#D38B5D] border border-[#6E7455]/30">{step.action}</code>
-                        </div>
-                        {step.observation && (
-                          <div className="pt-1">
-                            <span className="text-[#C2603A] font-bold mr-2">&gt;</span>
-                            <span className="text-sky-400 font-semibold">Observation: </span>
-                            <pre className="mt-1 bg-[#2A2723] p-3 rounded-lg text-[#DCD6BE] overflow-x-auto text-[11px] whitespace-pre-wrap border border-[#6E7455]/30 max-h-48 leading-relaxed">
-                              {step.observation}
-                            </pre>
-                          </div>
-                        )}
-                        {step.content && (
-                          <div className="pt-1">
-                            <span className="text-amber-400 font-semibold">Recall Detail: </span>
-                            <span className="text-[#EAE3D2]">{step.content}</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-xs text-[#6E7455] text-center py-6">
