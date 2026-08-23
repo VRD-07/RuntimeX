@@ -8,14 +8,12 @@ import {
   Zap, 
   Search, 
   FileText, 
-  Newspaper, 
   MessageSquare, 
   ExternalLink, 
   Download, 
   Send, 
   RefreshCw,
   Cpu,
-  Building2,
   BookOpen,
   ChevronDown,
   ChevronUp,
@@ -41,7 +39,7 @@ const MODEL_NAMES = {
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
-const CHART_COLORS = ['#C2603A', '#6E7455', '#2A2723', '#8B9467', '#D38B5D'];
+const CHART_COLORS = ['#38BDF8', '#A78BFA', '#34D399', '#FBBF24', '#F472B6'];
 
 // Must mirror SECTION_ORDER / SECTION_RESPONSE_KEYS in backend/agent_brain.py.
 // Declared once here so the source filter, the source chart and the chat context
@@ -70,9 +68,6 @@ const SOURCE_RESPONSE_KEYS = {
   hackernews: 'hn_posts'
 };
 
-// How many cards each competitor group shows before the "show all" expander.
-const GROUP_PREVIEW_COUNT = 4;
-
 // Turns "search_news(query='Sarvam AI funding')" into "search_news - Sarvam AI funding"
 // so a trace step fits on one line without hiding which tool ran or on what.
 function summarizeStep(step) {
@@ -88,11 +83,11 @@ function summarizeStep(step) {
 // A step's role badge. Chaos steps are labelled explicitly so a deliberately
 // injected failure can never be mistaken for a real one.
 function stepBadge(step) {
-  if (step.step_type === 'chaos' || step.chaos) return { label: 'CHAOS DEMO', className: 'bg-rose-700 text-white' };
-  if (step.step_type === 'memory_recall') return { label: 'MEMORY', className: 'bg-amber-600 text-white' };
-  if (step.agent_role === 'Analyst Agent') return { label: 'ANALYST', className: 'bg-[#6E7455] text-white' };
-  if (step.agent_role === 'Orchestrator') return { label: 'ORCHESTRATOR', className: 'bg-[#8B9467] text-white' };
-  return { label: 'FIELD', className: 'bg-[#C2603A] text-white' };
+  if (step.step_type === 'chaos' || step.chaos) return { label: 'CHAOS DEMO', className: 'bg-rose-500/90 text-white' };
+  if (step.step_type === 'memory_recall') return { label: 'MEMORY', className: 'bg-amber-400/90 text-slate-900' };
+  if (step.agent_role === 'Analyst Agent') return { label: 'ANALYST', className: 'bg-violet-500/85 text-white' };
+  if (step.agent_role === 'Orchestrator') return { label: 'ORCHESTRATOR', className: 'bg-emerald-500/85 text-white' };
+  return { label: 'FIELD', className: 'bg-sky-500/85 text-white' };
 }
 
 // Custom Responsive Horizontal Bar Chart
@@ -106,16 +101,16 @@ function CompetitorBarChart({ data }) {
         const barColor = CHART_COLORS[idx % CHART_COLORS.length];
         return (
           <div key={item.name} className="flex items-center space-x-3">
-            <span className="w-20 font-bold text-[#2A2723] truncate" title={item.name}>
+            <span className="w-20 font-bold text-slate-100 truncate" title={item.name}>
               {item.name}
             </span>
-            <div className="flex-1 bg-[#DCD6BE] rounded-full h-4 overflow-hidden border border-[#6E7455]/20 flex items-center">
+            <div className="flex-1 bg-white/[0.07] backdrop-blur-2xl rounded-full h-4 overflow-hidden border border-white/10 flex items-center">
               <div
                 className="h-full rounded-full transition-all duration-700 ease-out"
                 style={{ width: `${Math.max(pct, 8)}%`, backgroundColor: barColor }}
               />
             </div>
-            <span className="w-8 text-right font-bold text-[#C2603A]">
+            <span className="w-8 text-right font-bold text-sky-300">
               {item.count}
             </span>
           </div>
@@ -128,7 +123,7 @@ function CompetitorBarChart({ data }) {
 // Custom Responsive Donut SVG Chart
 function SourceDonutChart({ data }) {
   const total = data.reduce((acc, curr) => acc + curr.value, 0);
-  if (total === 0) return <div className="text-[#6E7455] text-xs">No signals</div>;
+  if (total === 0) return <div className="text-slate-400 text-xs">No signals</div>;
 
   let cumulativePercent = 0;
 
@@ -160,8 +155,8 @@ function SourceDonutChart({ data }) {
           })}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center font-mono">
-          <span className="text-sm font-bold text-[#2A2723]">{total}</span>
-          <span className="text-[9px] text-[#6E7455]">SIGNALS</span>
+          <span className="text-sm font-bold text-slate-100">{total}</span>
+          <span className="text-[9px] text-slate-400">SIGNALS</span>
         </div>
       </div>
 
@@ -173,9 +168,9 @@ function SourceDonutChart({ data }) {
                 className="w-2.5 h-2.5 rounded-full inline-block"
                 style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }}
               />
-              <span className="text-[#2A2723] font-medium">{item.name}</span>
+              <span className="text-slate-100 font-medium">{item.name}</span>
             </div>
-            <span className="font-bold text-[#6E7455]">{item.value}</span>
+            <span className="font-bold text-slate-400">{item.value}</span>
           </div>
         ))}
       </div>
@@ -183,51 +178,45 @@ function SourceDonutChart({ data }) {
   );
 }
 
-// One finding card. Extracted so the grouped feed and any future view render an
-// identical card instead of two copies of this markup drifting apart.
+// One finding card. Every card is identical in weight now: competitor identity is
+// a badge, not a layout boundary, so the grid reads as one intelligence board.
 function FindingCard({ item, topic }) {
   const isSpecificCompetitor = item.entity && item.entity !== 'General' && item.entity !== topic;
   return (
-    <div
-      className={`rounded-xl p-5 flex flex-col justify-between transition-all shadow-sm ${
-        isSpecificCompetitor
-          ? 'bg-[#EAE3D2] border-2 border-[#C2603A]/70 shadow-md hover:border-[#C2603A]'
-          : 'bg-[#EAE3D2]/80 border border-[#6E7455]/30 opacity-90 hover:opacity-100'
-      }`}
-    >
+    <div className="group flex h-full flex-col justify-between rounded-2xl border border-white/10 bg-white/[0.06] p-4 backdrop-blur-xl glass-edge glass-lift hover:border-sky-400/30">
       <div className="space-y-2.5">
         <div className="flex items-center justify-between gap-2">
-          {isSpecificCompetitor ? (
-            <span className="bg-[#C2603A] text-white font-mono font-bold px-2.5 py-0.5 rounded-md text-[11px] uppercase tracking-wider">
-              {item.entity}
-            </span>
-          ) : (
-            <span className="bg-[#6E7455]/20 text-[#6E7455] font-mono px-2 py-0.5 rounded text-[10px] font-semibold">
-              {item.entity || 'MARKET GENERAL'}
-            </span>
-          )}
+          <span
+            className={`rounded-md border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider ${
+              isSpecificCompetitor
+                ? 'border-sky-400/40 bg-sky-400/15 text-sky-200'
+                : 'border-white/10 bg-white/[0.06] text-slate-400'
+            }`}
+          >
+            {item.entity || 'MARKET GENERAL'}
+          </span>
 
-          <span className="text-[10px] font-mono text-[#6E7455] bg-[#DCD6BE] px-2 py-0.5 rounded border border-[#6E7455]/20">
+          <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-slate-400">
             {(SOURCE_LABELS[item.source_type] || item.source_type).toUpperCase()}
           </span>
         </div>
 
-        <h4 className="font-serif font-bold text-sm text-[#2A2723] leading-snug">
+        <h4 className="font-serif text-sm font-semibold leading-snug text-slate-50">
           {item.title}
         </h4>
 
-        <p className="text-xs text-[#2A2723]/80 leading-relaxed font-sans line-clamp-3">
+        <p className="line-clamp-3 font-sans text-xs leading-relaxed text-slate-400">
           {item.snippet}
         </p>
       </div>
 
-      <div className="pt-4 mt-3 border-t border-[#6E7455]/20 flex items-center justify-between font-mono text-[11px] text-[#6E7455]">
-        <span>{item.source_name} ({item.date})</span>
+      <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3 font-mono text-[11px] text-slate-500">
+        <span className="truncate pr-2">{item.source_name} ({item.date})</span>
         <a
           href={item.url}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center space-x-1 text-[#C2603A] hover:underline font-semibold"
+          className="inline-flex shrink-0 items-center gap-1 font-semibold text-sky-300 hover:text-sky-200"
         >
           <span>Link</span>
           <ExternalLink className="w-3 h-3" />
@@ -263,10 +252,6 @@ export default function App() {
   // one line per step by default because the raw log used to be longer than the
   // rest of the page combined.
   const [openTraceSteps, setOpenTraceSteps] = useState({});
-
-  // Findings grid state, keyed by competitor group name.
-  const [collapsedGroups, setCollapsedGroups] = useState({});
-  const [expandedGroups, setExpandedGroups] = useState({});
 
   // Chat state
   const [chatMessages, setChatMessages] = useState([]);
@@ -305,8 +290,6 @@ export default function App() {
     setLoading(true);
     setStaggeredStepCount(0);
     setOpenTraceSteps({});
-    setCollapsedGroups({});
-    setExpandedGroups({});
 
     let dynamicTrace = [];
 
@@ -483,31 +466,6 @@ export default function App() {
     });
   }, [allFindings, competitorFilter, sourceFilter]);
 
-  // Groups the flat feed by competitor. ~35 undifferentiated cards is not
-  // readable; ordering follows the competitor input so the groups appear in the
-  // order the user typed them, with unattributed market signals last.
-  const findingGroups = React.useMemo(() => {
-    const order = competitors.split(',').map(c => c.trim()).filter(Boolean);
-    const buckets = new Map();
-
-    filteredFindings.forEach(item => {
-      const entity = (item.entity || 'General').trim() || 'General';
-      const matched = order.find(c => entity.toLowerCase().includes(c.toLowerCase()));
-      const key = matched || (entity === 'General' ? 'Market General' : entity);
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(item);
-    });
-
-    const ranked = [...buckets.entries()].sort(([a], [b]) => {
-      const ai = order.findIndex(c => c === a);
-      const bi = order.findIndex(c => c === b);
-      // Named competitors keep input order; anything unattributed sinks to the bottom.
-      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-    });
-
-    return ranked.map(([name, items]) => ({ name, items, isCompetitor: order.includes(name) }));
-  }, [filteredFindings, competitors]);
-
   const competitorChartData = React.useMemo(() => {
     const comps = competitors.split(',').map(c => c.trim()).filter(Boolean);
     return comps.map(c => {
@@ -546,40 +504,40 @@ export default function App() {
   }, [scanResult]);
 
   return (
-    <div className="min-h-screen bg-[#EAE3D2] text-[#2A2723] flex flex-col font-sans selection:bg-[#C2603A] selection:text-white relative overflow-x-hidden">
+    <div className="min-h-screen text-slate-100 flex flex-col font-sans selection:bg-sky-500/40 selection:text-white relative overflow-x-hidden">
       
       {/* GLOBAL HEADER */}
-      <header className="border-b border-[#6E7455]/30 bg-[#EAE3D2]/90 sticky top-0 z-50 backdrop-blur-md">
+      <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/60 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3 cursor-pointer">
-            <div className="p-2.5 bg-[#C2603A] text-white rounded-xl shadow-md">
+            <div className="p-2.5 bg-sky-500/90 text-white rounded-xl glass-edge">
               <Zap className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="font-serif font-bold text-xl text-[#2A2723] tracking-tight">IntelPulse ReAct Intelligence</h1>
-              <p className="text-xs text-[#6E7455] font-sans">Multi-Agent Research & Memory Trace Platform</p>
+              <h1 className="font-serif font-bold text-xl text-slate-100 tracking-tight">IntelPulse ReAct Intelligence</h1>
+              <p className="text-xs text-slate-400 font-sans">Multi-Agent Research & Memory Trace Platform</p>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
             {/* Live Indicator */}
-            <div className="hidden sm:flex items-center space-x-2 bg-[#DCD6BE] px-3.5 py-1.5 rounded-lg border border-[#6E7455]/40 text-xs font-mono">
-              <span className="w-2.5 h-2.5 rounded-full bg-[#C2603A] animate-pulse"></span>
-              <span className="text-[#2A2723] font-semibold">
+            <div className="hidden sm:flex items-center space-x-2 bg-white/[0.07] backdrop-blur-2xl px-3.5 py-1.5 rounded-lg border border-white/10 text-xs font-mono">
+              <span className="w-2.5 h-2.5 rounded-full bg-sky-500/90 animate-pulse"></span>
+              <span className="text-slate-100 font-semibold">
                 {loading ? 'ReAct Loop Active...' : 'System Live'}
               </span>
             </div>
 
             {/* Dynamic Model Selector Badge */}
-            <div className="flex items-center space-x-2 bg-[#2A2723] text-[#EAE3D2] px-3 py-1.5 rounded-lg border border-[#6E7455]/40 text-xs font-mono">
-              <Cpu className="w-4 h-4 text-[#C2603A]" />
+            <div className="flex items-center space-x-2 bg-slate-950/55 backdrop-blur-2xl text-slate-100 px-3 py-1.5 rounded-lg border border-white/10 text-xs font-mono">
+              <Cpu className="w-4 h-4 text-sky-300" />
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                className="bg-transparent text-[#EAE3D2] text-xs font-mono font-medium focus:outline-none cursor-pointer"
+                className="bg-transparent text-slate-100 text-xs font-mono font-medium focus:outline-none cursor-pointer"
               >
                 {Object.entries(MODEL_NAMES).map(([id, label]) => (
-                  <option key={id} value={id} className="bg-[#2A2723] text-white">{label}</option>
+                  <option key={id} value={id} className="bg-slate-950/55 backdrop-blur-2xl text-white">{label}</option>
                 ))}
               </select>
             </div>
@@ -588,19 +546,22 @@ export default function App() {
       </header>
 
       {/* DASHBOARD SINGLE SCROLL PAGE */}
-      <main className="max-w-7xl mx-auto px-6 py-8 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <main className="max-w-7xl mx-auto px-6 py-8 flex-1 w-full flex flex-col gap-8">
+
+        {/* TOP ROW: parameters sidebar + headline stats and synthesis */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* LEFT SIDEBAR: Market Parameters (4 cols) */}
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-[#DCD6BE] border border-[#6E7455]/40 rounded-2xl p-6 shadow-md space-y-5">
-            <div className="flex items-center justify-between border-b border-[#6E7455]/30 pb-3">
-              <h2 className="font-serif font-bold text-base text-[#2A2723] flex items-center gap-2">
-                <Search className="w-4 h-4 text-[#C2603A]" />
+          <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 glass-edge space-y-5">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h2 className="font-serif font-bold text-base text-slate-100 flex items-center gap-2">
+                <Search className="w-4 h-4 text-sky-300" />
                 Market Parameters
               </h2>
               <button 
                 onClick={fetchHealth} 
-                className="p-1 hover:bg-[#EAE3D2] rounded-md transition-colors text-[#6E7455]"
+                className="p-1 hover:bg-white/10 rounded-md transition-colors text-slate-400"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
@@ -608,7 +569,7 @@ export default function App() {
 
             <form onSubmit={handleScan} className="space-y-4 text-xs font-sans">
               <div>
-                <label className="block text-[#2A2723] font-semibold mb-1.5">
+                <label className="block text-slate-100 font-semibold mb-1.5">
                   Industry / Domain Track
                 </label>
                 <input
@@ -616,13 +577,13 @@ export default function App() {
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   placeholder="e.g. Regional language capabilities for AI"
-                  className="w-full bg-[#EAE3D2] border border-[#6E7455]/50 rounded-xl px-3.5 py-2.5 text-[#2A2723] focus:outline-none focus:border-[#C2603A] font-medium"
+                  className="w-full bg-white/[0.05] backdrop-blur-sm border border-white/10 rounded-xl px-3.5 py-2.5 text-slate-100 focus:outline-none focus:border-sky-400/40 font-medium"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-[#2A2723] font-semibold mb-1.5">
+                <label className="block text-slate-100 font-semibold mb-1.5">
                   Target Competitors (Comma Separated)
                 </label>
                 <input
@@ -630,14 +591,14 @@ export default function App() {
                   value={competitors}
                   onChange={(e) => setCompetitors(e.target.value)}
                   placeholder="e.g. Sarvam, OpenAI, Google"
-                  className="w-full bg-[#EAE3D2] border border-[#6E7455]/50 rounded-xl px-3.5 py-2.5 text-[#2A2723] focus:outline-none focus:border-[#C2603A] font-medium"
+                  className="w-full bg-white/[0.05] backdrop-blur-sm border border-white/10 rounded-xl px-3.5 py-2.5 text-slate-100 focus:outline-none focus:border-sky-400/40 font-medium"
                   required
                 />
               </div>
 
               <div>
-                <div className="flex justify-between text-[#6E7455] mb-1.5">
-                  <span className="font-semibold text-[#2A2723]">Scan Depth</span>
+                <div className="flex justify-between text-slate-400 mb-1.5">
+                  <span className="font-semibold text-slate-100">Scan Depth</span>
                   <span className="font-mono">{maxItems} items per source</span>
                 </div>
                 <input
@@ -646,14 +607,14 @@ export default function App() {
                   max="10"
                   value={maxItems}
                   onChange={(e) => setMaxItems(parseInt(e.target.value))}
-                  className="w-full accent-[#C2603A]"
+                  className="w-full accent-sky-400"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-[#C2603A] hover:bg-[#a8502e] text-white font-semibold py-3 rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
+                className="w-full bg-sky-500/90 hover:bg-sky-400 text-white font-semibold py-3 rounded-xl glass-edge transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
               >
                 {loading ? (
                   <>
@@ -672,11 +633,11 @@ export default function App() {
             {scanError && (
               <div
                 role="alert"
-                className="mt-4 flex items-start gap-2 bg-[#C2603A]/12 border border-[#C2603A]/50 rounded-xl p-3 font-mono text-xs text-[#2A2723]"
+                className="mt-4 flex items-start gap-2 bg-rose-500/10 border border-rose-400/35 rounded-xl p-3 font-mono text-xs text-rose-100"
               >
-                <AlertTriangle className="w-4 h-4 text-[#C2603A] shrink-0 mt-0.5" />
+                <AlertTriangle className="w-4 h-4 text-rose-300 shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-bold text-[#C2603A]">Scan failed</p>
+                  <p className="font-bold text-rose-300">Scan failed</p>
                   <p className="mt-0.5 break-words">{scanError}</p>
                 </div>
               </div>
@@ -684,46 +645,46 @@ export default function App() {
           </div>
 
           {/* VISIBLE MEMORY TRACE PANEL (PART C) */}
-          <div className="bg-[#DCD6BE] border-2 border-[#6E7455]/40 rounded-2xl p-5 shadow-md space-y-3 font-mono text-xs">
-            <div className="flex items-center justify-between border-b border-[#6E7455]/30 pb-2">
-              <span className="font-serif font-bold text-[#2A2723] flex items-center gap-1.5">
-                <History className="w-4 h-4 text-[#C2603A]" />
+          <div className="bg-white/[0.07] backdrop-blur-2xl border-2 border-white/10 rounded-2xl p-5 glass-edge space-y-3 font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="font-serif font-bold text-slate-100 flex items-center gap-1.5">
+                <History className="w-4 h-4 text-sky-300" />
                 Long-Term Memory Trace
               </span>
-              <span className="bg-[#2A2723] text-[#EAE3D2] text-[10px] px-2 py-0.5 rounded font-bold">
+              <span className="bg-slate-950/55 backdrop-blur-2xl text-slate-100 text-[10px] px-2 py-0.5 rounded font-bold">
                 SQLite Store
               </span>
             </div>
 
             {memoryRecallEvent ? (
-              <div className="bg-[#EAE3D2] p-3 rounded-xl border border-[#6E7455]/30 space-y-2">
-                <div className="flex items-center space-x-1.5 text-[11px] font-bold text-[#C2603A]">
+              <div className="bg-white/[0.05] backdrop-blur-sm p-3 rounded-xl border border-white/10 space-y-2">
+                <div className="flex items-center space-x-1.5 text-[11px] font-bold text-sky-300">
                   <Clock className="w-3.5 h-3.5" />
                   <span>[Memory Recall]</span>
                 </div>
-                <p className="text-[#2A2723] text-xs font-medium leading-relaxed">
+                <p className="text-slate-100 text-xs font-medium leading-relaxed">
                   {memoryRecallEvent.content || "Loaded prior gap report for target competitor."}
                 </p>
-                <div className="pt-1 border-t border-[#6E7455]/20 text-[11px] text-[#6E7455] font-semibold">
-                  <span className="text-[#2A2723]">Delta: </span>
+                <div className="pt-1 border-t border-white/10 text-[11px] text-slate-400 font-semibold">
+                  <span className="text-slate-100">Delta: </span>
                   {memoryRecallEvent.delta || "Baseline established."}
                 </div>
               </div>
             ) : (
-              <div className="bg-[#EAE3D2] p-3 rounded-xl border border-[#6E7455]/30 text-[#6E7455] text-center text-[11px]">
+              <div className="bg-white/[0.05] backdrop-blur-sm p-3 rounded-xl border border-white/10 text-slate-400 text-center text-[11px]">
                 No memory recall logged yet. Execute a scan to trigger SQLite cross-run persistence.
               </div>
             )}
           </div>
 
           {/* QUICK ENGINE STATS PANEL */}
-          <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl p-5 space-y-3 font-mono text-xs shadow-md">
-            <div className="flex items-center justify-between border-b border-[#6E7455]/40 pb-2">
-              <span className="text-[#C2603A] font-bold">Architecture</span>
+          <div className="bg-slate-950/55 backdrop-blur-2xl text-slate-100 border border-white/10 rounded-2xl p-5 space-y-3 font-mono text-xs glass-edge">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="text-sky-300 font-bold">Architecture</span>
               <span>Multi-Agent + Memory</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#6E7455]">Active Model:</span>
+              <span className="text-slate-400">Active Model:</span>
               <span className="text-white font-semibold">
                 {scanResult?.model_used
                   ? (MODEL_NAMES[scanResult.model_used] || scanResult.model_used)
@@ -731,7 +692,7 @@ export default function App() {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#6E7455]">API Key Status:</span>
+              <span className="text-slate-400">API Key Status:</span>
               <span className={health.llm_active ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
                 {health.llm_active ? "Gemini Active" : "Fallback Engine Active"}
               </span>
@@ -743,57 +704,57 @@ export default function App() {
         <div className="lg:col-span-8 flex flex-col space-y-8">
 
           {/* SECTION 1: STATS & COMPARISON CHARTS ROW */}
-          <div className="bg-[#DCD6BE] border border-[#6E7455]/40 rounded-2xl p-6 shadow-md space-y-6">
-            <h2 className="font-serif font-bold text-lg text-[#2A2723] flex items-center gap-2 border-b border-[#6E7455]/30 pb-3">
-              <BarChart3 className="w-5 h-5 text-[#C2603A]" />
+          <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 glass-edge space-y-6">
+            <h2 className="font-serif font-bold text-lg text-slate-100 flex items-center gap-2 border-b border-white/10 pb-3">
+              <BarChart3 className="w-5 h-5 text-sky-300" />
               Signal Distribution & Competitor Comparison
             </h2>
 
             {/* Stat Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
-              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
-                <p className="text-[#6E7455] text-[11px]">Total Signals</p>
-                <p className="text-2xl font-bold text-[#C2603A]">{allFindings.length}</p>
+              <div className="bg-white/[0.05] backdrop-blur-sm p-3.5 rounded-xl border border-white/10">
+                <p className="text-slate-400 text-[11px]">Total Signals</p>
+                <p className="text-2xl font-bold text-sky-300">{allFindings.length}</p>
               </div>
-              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
-                <p className="text-[#6E7455] text-[11px]">Competitors</p>
-                <p className="text-2xl font-bold text-[#2A2723]">{competitorChartData.length}</p>
+              <div className="bg-white/[0.05] backdrop-blur-sm p-3.5 rounded-xl border border-white/10">
+                <p className="text-slate-400 text-[11px]">Competitors</p>
+                <p className="text-2xl font-bold text-slate-100">{competitorChartData.length}</p>
               </div>
-              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
-                <p className="text-[#6E7455] text-[11px]">Data Sources</p>
-                <p className="text-2xl font-bold text-[#6E7455]">{sourceChartData.length}</p>
+              <div className="bg-white/[0.05] backdrop-blur-sm p-3.5 rounded-xl border border-white/10">
+                <p className="text-slate-400 text-[11px]">Data Sources</p>
+                <p className="text-2xl font-bold text-slate-400">{sourceChartData.length}</p>
               </div>
-              <div className="bg-[#EAE3D2] p-3.5 rounded-xl border border-[#6E7455]/30">
-                <p className="text-[#6E7455] text-[11px]">Trace Steps</p>
-                <p className="text-2xl font-bold text-[#2A2723]">{scanResult?.trace?.length || 0}</p>
+              <div className="bg-white/[0.05] backdrop-blur-sm p-3.5 rounded-xl border border-white/10">
+                <p className="text-slate-400 text-[11px]">Trace Steps</p>
+                <p className="text-2xl font-bold text-slate-100">{scanResult?.trace?.length || 0}</p>
               </div>
             </div>
 
             {/* Custom SVG Charts Row */}
             {allFindings.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-2">
-                <div className="md:col-span-7 bg-[#EAE3D2] p-4 rounded-xl border border-[#6E7455]/30 space-y-3">
-                  <h4 className="font-mono text-xs font-bold text-[#2A2723]">Competitor Signal Share</h4>
+                <div className="md:col-span-7 bg-white/[0.05] backdrop-blur-sm p-4 rounded-xl border border-white/10 space-y-3">
+                  <h4 className="font-mono text-xs font-bold text-slate-100">Competitor Signal Share</h4>
                   <CompetitorBarChart data={competitorChartData} />
                 </div>
 
-                <div className="md:col-span-5 bg-[#EAE3D2] p-4 rounded-xl border border-[#6E7455]/30 space-y-3">
-                  <h4 className="font-mono text-xs font-bold text-[#2A2723]">Source Breakdown</h4>
+                <div className="md:col-span-5 bg-white/[0.05] backdrop-blur-sm p-4 rounded-xl border border-white/10 space-y-3">
+                  <h4 className="font-mono text-xs font-bold text-slate-100">Source Breakdown</h4>
                   <SourceDonutChart data={sourceChartData} />
                 </div>
               </div>
             ) : (
-              <div className="bg-[#EAE3D2] p-8 rounded-xl border border-[#6E7455]/30 text-center font-mono text-xs text-[#6E7455]">
+              <div className="bg-white/[0.05] backdrop-blur-sm p-8 rounded-xl border border-white/10 text-center font-mono text-xs text-slate-400">
                 Click "Run Autonomous Scan" to analyze competitive density and source distribution.
               </div>
             )}
           </div>
 
           {/* SECTION 2: EXECUTIVE SUMMARY */}
-          <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl p-6 shadow-xl space-y-3">
-            <div className="flex justify-between items-center border-b border-[#6E7455]/40 pb-3">
-              <h3 className="font-serif font-bold text-base text-[#EAE3D2] flex items-center gap-2">
-                <FileText className="w-5 h-5 text-[#C2603A]" />
+          <div className="bg-slate-950/55 backdrop-blur-2xl text-slate-100 border border-white/10 rounded-2xl p-6 glass-edge space-y-3">
+            <div className="flex justify-between items-center border-b border-white/10 pb-3">
+              <h3 className="font-serif font-bold text-base text-slate-100 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-sky-300" />
                 Executive Takeaway Summary
               </h3>
               {scanResult?.executive_report && (
@@ -806,41 +767,44 @@ export default function App() {
                     a.download = `IntelPulse_${topic.replace(/\s+/g, '_')}_Report.md`;
                     a.click();
                   }}
-                  className="text-xs bg-[#C2603A] hover:bg-[#a8502e] text-white px-3 py-1.5 rounded-lg font-mono font-medium flex items-center gap-1.5 transition-colors"
+                  className="text-xs bg-sky-500/90 hover:bg-sky-400 text-white px-3 py-1.5 rounded-lg font-mono font-medium flex items-center gap-1.5 transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" /> Brief (.md)
                 </button>
               )}
             </div>
 
-            <p className="text-sm text-[#DCD6BE] leading-relaxed font-sans font-medium">
+            <p className="text-sm text-slate-300 leading-relaxed font-sans font-medium">
               {executiveTakeaway}
             </p>
           </div>
 
+          </div>
+        </div>
+
           {/* SECTION 3: UNIFIED FILTERABLE FINDINGS GRID */}
-          <div className="bg-[#DCD6BE] border border-[#6E7455]/40 rounded-2xl p-6 shadow-md space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#6E7455]/30 pb-4 gap-4">
+          <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 glass-edge space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/10 pb-4 gap-4">
               <div>
-                <h3 className="font-serif font-bold text-lg text-[#2A2723] flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-[#C2603A]" />
+                <h3 className="font-serif font-bold text-lg text-slate-100 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-sky-300" />
                   Grounded Intelligence Findings ({filteredFindings.length})
                 </h3>
-                <p className="text-xs text-[#6E7455]">Filterable continuous grid of competitor signals and academic research</p>
+                <p className="text-xs text-slate-400">Filterable continuous grid of competitor signals and academic research</p>
               </div>
 
               {/* Filter Chips */}
               <div className="flex flex-wrap gap-2 text-xs font-mono">
-                <div className="flex items-center space-x-1 bg-[#EAE3D2] p-1 rounded-lg border border-[#6E7455]/30">
-                  <Filter className="w-3 h-3 text-[#C2603A] ml-1" />
+                <div className="flex items-center space-x-1 bg-white/[0.05] backdrop-blur-sm p-1 rounded-lg border border-white/10">
+                  <Filter className="w-3 h-3 text-sky-300 ml-1" />
                   {competitorChips.map(comp => (
                     <button
                       key={comp}
                       onClick={() => setCompetitorFilter(comp)}
                       className={`px-2.5 py-1 rounded-md transition-all font-semibold ${
                         competitorFilter === comp
-                          ? 'bg-[#C2603A] text-white shadow-sm'
-                          : 'text-[#6E7455] hover:text-[#2A2723]'
+                          ? 'bg-sky-500/90 text-white glass-edge'
+                          : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       {comp}
@@ -851,16 +815,16 @@ export default function App() {
             </div>
 
             {/* Source Type Filter Sub-Bar */}
-            <div className="flex flex-wrap gap-2 text-xs font-mono border-b border-[#6E7455]/20 pb-3">
-              <span className="text-[#6E7455] font-semibold py-1">Source Filter:</span>
+            <div className="flex flex-wrap gap-2 text-xs font-mono border-b border-white/10 pb-3">
+              <span className="text-slate-400 font-semibold py-1">Source Filter:</span>
               {['All', ...SOURCE_TYPES].map(src => (
                 <button
                   key={src}
                   onClick={() => setSourceFilter(src)}
                   className={`px-3 py-1 rounded-full border transition-all ${
                     sourceFilter === src
-                      ? 'bg-[#2A2723] text-[#EAE3D2] border-[#2A2723] font-bold'
-                      : 'bg-[#EAE3D2] text-[#6E7455] border-[#6E7455]/30 hover:border-[#C2603A]'
+                      ? 'bg-slate-950/55 backdrop-blur-2xl text-slate-100 border-white/15 font-bold'
+                      : 'bg-white/[0.05] backdrop-blur-sm text-slate-400 border-white/10 hover:border-sky-400/60'
                   }`}
                 >
                   {(SOURCE_LABELS[src] || src).toUpperCase()}
@@ -868,105 +832,51 @@ export default function App() {
               ))}
             </div>
 
-            {/* Grouped by competitor, top few per group, expander for the rest */}
-            {findingGroups.length > 0 ? (
-              <div className="space-y-4">
-                {findingGroups.map((group) => {
-                  const isCollapsed = !!collapsedGroups[group.name];
-                  const showAll = !!expandedGroups[group.name];
-                  const visible = showAll ? group.items : group.items.slice(0, GROUP_PREVIEW_COUNT);
-                  const hidden = group.items.length - visible.length;
-
-                  return (
-                    <div
-                      key={group.name}
-                      className={`rounded-xl border overflow-hidden ${
-                        group.isCompetitor
-                          ? 'border-[#C2603A]/40 bg-[#EAE3D2]/50'
-                          : 'border-[#6E7455]/30 bg-[#EAE3D2]/30'
-                      }`}
-                    >
-                      <button
-                        onClick={() => setCollapsedGroups(prev => ({ ...prev, [group.name]: !prev[group.name] }))}
-                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#EAE3D2] transition-colors text-left"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          {group.isCompetitor ? (
-                            <Building2 className="w-4 h-4 text-[#C2603A]" />
-                          ) : (
-                            <Newspaper className="w-4 h-4 text-[#6E7455]" />
-                          )}
-                          <span className="font-serif font-bold text-sm text-[#2A2723]">{group.name}</span>
-                          <span className="font-mono text-[10px] bg-[#DCD6BE] text-[#6E7455] px-2 py-0.5 rounded-full border border-[#6E7455]/25">
-                            {group.items.length} signals
-                          </span>
-                        </div>
-                        {isCollapsed
-                          ? <ChevronDown className="w-4 h-4 text-[#6E7455]" />
-                          : <ChevronUp className="w-4 h-4 text-[#C2603A]" />}
-                      </button>
-
-                      {!isCollapsed && (
-                        <div className="px-4 pb-4 space-y-3">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {visible.map(item => (
-                              <FindingCard key={item.id} item={item} topic={topic} />
-                            ))}
-                          </div>
-
-                          {group.items.length > GROUP_PREVIEW_COUNT && (
-                            <button
-                              onClick={() => setExpandedGroups(prev => ({ ...prev, [group.name]: !prev[group.name] }))}
-                              className="w-full py-2 rounded-lg border border-dashed border-[#6E7455]/40 font-mono text-[11px] text-[#6E7455] hover:text-[#C2603A] hover:border-[#C2603A]/50 transition-colors flex items-center justify-center gap-1.5"
-                            >
-                              {showAll
-                                ? <>Show top {GROUP_PREVIEW_COUNT} only <ChevronUp className="w-3 h-3" /></>
-                                : <>Show all {group.items.length} ({hidden} more) <ChevronDown className="w-3 h-3" /></>}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+            {/* One uniform auto-fill grid: cards flow across the full width and
+                competitor identity survives as a badge, not as a section break. */}
+            {filteredFindings.length > 0 ? (
+              <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))]">
+                {filteredFindings.map(item => (
+                  <FindingCard key={item.id} item={item} topic={topic} />
+                ))}
               </div>
             ) : (
-              <div className="bg-[#EAE3D2] p-12 rounded-xl border border-[#6E7455]/30 text-center font-mono text-xs text-[#6E7455]">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-12 text-center font-mono text-xs text-slate-400 backdrop-blur-sm">
                 {scanResult ? "No findings match the selected competitor or source filter." : "No intelligence findings available yet. Click 'Run Autonomous Scan'."}
               </div>
             )}
           </div>
 
           {/* SECTION 4: AGENT REASONING TRACE */}
-          <div className="bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/40 rounded-2xl shadow-xl overflow-hidden font-mono text-xs">
+          <div className="bg-slate-950/55 backdrop-blur-2xl text-slate-100 border border-white/10 rounded-2xl glass-edge overflow-hidden font-mono text-xs">
             <button
               onClick={() => setTraceExpanded(!traceExpanded)}
-              className="w-full px-6 py-4 flex items-center justify-between border-b border-[#6E7455]/30 bg-[#2A2723] hover:bg-[#23201d] transition-colors text-left"
+              className="w-full px-6 py-4 flex items-center justify-between border-b border-white/10 bg-slate-950/55 backdrop-blur-2xl hover:bg-white/[0.06] transition-colors text-left"
             >
               <div className="flex items-center space-x-3">
-                <Cpu className="w-5 h-5 text-[#C2603A]" />
+                <Cpu className="w-5 h-5 text-sky-300" />
                 <div>
-                  <h3 className="font-serif font-bold text-sm text-[#EAE3D2]">
+                  <h3 className="font-serif font-bold text-sm text-slate-100">
                     Multi-Agent Reasoning & Execution Trace ({scanResult?.trace?.length || 0} Steps)
                   </h3>
-                  <p className="text-[11px] text-[#6E7455] font-mono">
+                  <p className="text-[11px] text-slate-400 font-mono">
                     Field Agent ➔ Orchestrator ➔ Analyst Agent Execution Log
                   </p>
                 </div>
               </div>
-              <div className="flex items-center space-x-2 text-[#C2603A]">
+              <div className="flex items-center space-x-2 text-sky-300">
                 <span className="text-xs font-semibold">{traceExpanded ? 'Hide Trace' : 'Expand Trace'}</span>
                 {traceExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </div>
             </button>
 
             {traceExpanded && (
-              <div className="bg-[#2A2723]">
+              <div className="bg-slate-950/55 backdrop-blur-2xl">
                 {scanResult?.trace?.length > 0 ? (
                   // Capped height: the full log runs longer than the rest of the
                   // page, so it scrolls inside its own panel instead of pushing
                   // the analyst Q&A off screen.
-                  <div className="max-h-[420px] overflow-y-auto divide-y divide-[#6E7455]/15">
+                  <div className="max-h-[420px] overflow-y-auto divide-y divide-white/[0.06]">
                     {scanResult.trace.slice(0, staggeredStepCount).map((step, idx) => {
                       const badge = stepBadge(step);
                       const isOpen = !!openTraceSteps[idx];
@@ -974,40 +884,40 @@ export default function App() {
                         <div key={idx} className="text-xs font-mono">
                           <button
                             onClick={() => setOpenTraceSteps(prev => ({ ...prev, [idx]: !prev[idx] }))}
-                            className="w-full px-5 py-2 flex items-center gap-3 hover:bg-[#1F1D1A] transition-colors text-left"
+                            className="w-full px-5 py-2 flex items-center gap-3 hover:bg-white/[0.05] transition-colors text-left"
                           >
                             {isOpen
-                              ? <ChevronUp className="w-3.5 h-3.5 text-[#C2603A] shrink-0" />
-                              : <ChevronDown className="w-3.5 h-3.5 text-[#6E7455] shrink-0" />}
-                            <span className="text-[#6E7455] w-8 shrink-0">{String(step.step ?? idx + 1).padStart(2, '0')}</span>
+                              ? <ChevronUp className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                              : <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+                            <span className="text-slate-400 w-8 shrink-0">{String(step.step ?? idx + 1).padStart(2, '0')}</span>
                             <span className={`${badge.className} px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 w-[92px] text-center`}>
                               {badge.label}
                             </span>
-                            <span className="text-[#DCD6BE] truncate flex-1">{summarizeStep(step)}</span>
+                            <span className="text-slate-300 truncate flex-1">{summarizeStep(step)}</span>
                             {step.observation
                               ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                              : <RefreshCw className="w-3.5 h-3.5 text-[#6E7455] animate-spin shrink-0" />}
-                            <span className="text-[10px] text-[#6E7455] shrink-0 w-16 text-right">{step.ts || '--:--:--'}</span>
+                              : <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" />}
+                            <span className="text-[10px] text-slate-400 shrink-0 w-16 text-right">{step.ts || '--:--:--'}</span>
                           </button>
 
                           {isOpen && (
-                            <div className="px-5 pb-4 pt-1 space-y-2 bg-[#1F1D1A]">
+                            <div className="px-5 pb-4 pt-1 space-y-2 bg-black/35 backdrop-blur-sm">
                               {step.thought && (
                                 <div>
-                                  <span className="text-[#DCD6BE] font-semibold">Thought: </span>
-                                  <span className="text-[#EAE3D2]">{step.thought}</span>
+                                  <span className="text-slate-300 font-semibold">Thought: </span>
+                                  <span className="text-slate-100">{step.thought}</span>
                                 </div>
                               )}
                               {step.action && (
                                 <div>
-                                  <span className="text-[#D38B5D] font-semibold">Action: </span>
-                                  <code className="bg-[#2A2723] px-2 py-0.5 rounded text-[#D38B5D] border border-[#6E7455]/30 break-all">{step.action}</code>
+                                  <span className="text-amber-300 font-semibold">Action: </span>
+                                  <code className="bg-slate-950/55 backdrop-blur-2xl px-2 py-0.5 rounded text-amber-300 border border-white/10 break-all">{step.action}</code>
                                 </div>
                               )}
                               {step.observation && (
                                 <div>
                                   <span className="text-sky-400 font-semibold">Observation: </span>
-                                  <pre className="mt-1 bg-[#2A2723] p-3 rounded-lg text-[#DCD6BE] overflow-auto text-[11px] whitespace-pre-wrap border border-[#6E7455]/30 max-h-56 leading-relaxed">
+                                  <pre className="mt-1 bg-slate-950/55 backdrop-blur-2xl p-3 rounded-lg text-slate-300 overflow-auto text-[11px] whitespace-pre-wrap border border-white/10 max-h-56 leading-relaxed">
                                     {step.observation}
                                   </pre>
                                 </div>
@@ -1015,7 +925,7 @@ export default function App() {
                               {step.content && (
                                 <div>
                                   <span className="text-amber-400 font-semibold">Recall Detail: </span>
-                                  <span className="text-[#EAE3D2]">{step.content}</span>
+                                  <span className="text-slate-100">{step.content}</span>
                                 </div>
                               )}
                             </div>
@@ -1025,7 +935,7 @@ export default function App() {
                     })}
                   </div>
                 ) : (
-                  <p className="text-xs text-[#6E7455] text-center py-6">
+                  <p className="text-xs text-slate-400 text-center py-6">
                     No reasoning trace recorded yet. Run an autonomous scan above.
                   </p>
                 )}
@@ -1034,27 +944,27 @@ export default function App() {
           </div>
 
           {/* SECTION 5: ANALYST Q&A PANEL WITH MULTI-TURN MEMORY & LIVE TOOL BADGES */}
-          <div className="bg-[#2A2723] border border-[#6E7455]/40 rounded-2xl p-6 shadow-xl space-y-4">
-            <div className="border-b border-[#6E7455]/30 pb-3 flex justify-between items-center">
+          <div className="bg-slate-950/55 backdrop-blur-2xl border border-white/10 rounded-2xl p-6 glass-edge space-y-4">
+            <div className="border-b border-white/10 pb-3 flex justify-between items-center">
               <div>
-                <h3 className="font-serif font-bold text-[#EAE3D2] text-base flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5 text-[#C2603A]" />
+                <h3 className="font-serif font-bold text-slate-100 text-base flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-sky-300" />
                   Interactive Strategy Q&A
                 </h3>
-                <p className="text-xs text-[#6E7455] font-sans">
+                <p className="text-xs text-slate-400 font-sans">
                   Stateful multi-turn conversation over retrieved signals. Mentions of 'patents', 'news', or 'github' trigger real-time Field Agent lookups.
                 </p>
               </div>
-              <span className="bg-[#6E7455]/20 text-[#DCD6BE] text-[10px] font-mono px-2.5 py-1 rounded border border-[#6E7455]/30">
+              <span className="bg-white/10 text-slate-300 text-[10px] font-mono px-2.5 py-1 rounded border border-white/10">
                 Multi-Turn Active
               </span>
             </div>
 
-            <div className="bg-[#1F1D1A] border border-[#6E7455]/30 rounded-xl p-4 h-[340px] overflow-y-auto space-y-3 font-sans text-xs">
+            <div className="bg-black/35 backdrop-blur-sm border border-white/10 rounded-xl p-4 h-[340px] overflow-y-auto space-y-3 font-sans text-xs">
               {chatMessages.length === 0 ? (
-                <div className="text-center py-16 text-[#6E7455] space-y-2">
-                  <MessageSquare className="w-8 h-8 mx-auto text-[#6E7455]/60" />
-                  <p className="text-xs text-[#6E7455]">
+                <div className="text-center py-16 text-slate-400 space-y-2">
+                  <MessageSquare className="w-8 h-8 mx-auto text-slate-400" />
+                  <p className="text-xs text-slate-400">
                     Ask follow-up questions such as: "Now compare that to Sarvam" or "Deep dive into their patent filings."
                   </p>
                 </div>
@@ -1064,12 +974,12 @@ export default function App() {
                     key={i}
                     className={`p-3.5 rounded-xl max-w-[85%] ${
                       msg.role === 'user'
-                        ? 'ml-auto bg-[#C2603A] text-white font-medium shadow-sm'
-                        : 'bg-[#2A2723] text-[#EAE3D2] border border-[#6E7455]/30 space-y-2'
+                        ? 'ml-auto bg-sky-500/90 text-white font-medium glass-edge'
+                        : 'bg-slate-950/55 backdrop-blur-2xl text-slate-100 border border-white/10 space-y-2'
                     }`}
                   >
                     {msg.tool_executed && (
-                      <div className="inline-flex items-center space-x-1.5 bg-[#C2603A]/20 border border-[#C2603A]/50 text-[#C2603A] px-2 py-0.5 rounded text-[10px] font-mono font-bold">
+                      <div className="inline-flex items-center space-x-1.5 bg-sky-400/15 border border-sky-400/45 text-sky-300 px-2 py-0.5 rounded text-[10px] font-mono font-bold">
                         <Zap className="w-3 h-3" />
                         <span>Live Field Lookup: {msg.tool_executed.action}</span>
                       </div>
@@ -1093,19 +1003,18 @@ export default function App() {
                 value={userQuestion}
                 onChange={(e) => setUserQuestion(e.target.value)}
                 placeholder="Ask follow-up question (e.g. 'deep dive into their patent filings')..."
-                className="flex-1 bg-[#1F1D1A] border border-[#6E7455]/50 rounded-xl px-4 py-2.5 text-xs text-[#EAE3D2] focus:outline-none focus:border-[#C2603A]"
+                className="flex-1 bg-black/35 backdrop-blur-sm border border-white/10 rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-sky-400/40"
               />
               <button
                 type="submit"
                 disabled={chatLoading}
-                className="bg-[#C2603A] hover:bg-[#a8502e] text-white px-5 py-2.5 rounded-xl font-semibold flex items-center justify-center transition-colors disabled:opacity-50 text-xs shadow-md"
+                className="bg-sky-500/90 hover:bg-sky-400 text-white px-5 py-2.5 rounded-xl font-semibold flex items-center justify-center transition-colors disabled:opacity-50 text-xs glass-edge"
               >
                 <Send className="w-4 h-4" />
               </button>
             </form>
           </div>
 
-        </div>
       </main>
     </div>
   );

@@ -14,10 +14,12 @@ export default {
         'beige-card': '#DCD6BE',
       },
       fontFamily: {
-        fraunces: ['Fraunces', 'serif'],
-        serif: ['Fraunces', 'serif'],
+        // 'serif' is kept as the display alias so every existing font-serif class
+        // keeps working; it now resolves to a geometric sans that suits glass.
+        display: ['"Space Grotesk"', 'Inter', 'sans-serif'],
+        serif: ['"Space Grotesk"', 'Inter', 'sans-serif'],
         sans: ['Inter', 'sans-serif'],
-        mono: ['"IBM Plex Mono"', 'monospace'],
+        mono: ['"JetBrains Mono"', '"IBM Plex Mono"', 'monospace'],
       }
     },
   },
