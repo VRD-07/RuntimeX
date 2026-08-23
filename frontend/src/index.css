@@ -3,93 +3,123 @@
 @tailwind utilities;
 
 /*
-  Glassmorphism base. The frosted panels in App.jsx are translucent, so the depth
-  has to come from what sits behind them: a deep slate base plus three fixed,
-  heavily-blurred colour fields. They live on the body's ::before rather than in
-  the React tree so no component has to render decoration, and pointer-events
-  never intercept a click.
+  Single-screen dashboard on a warm paper ground.
+
+  The page itself never scrolls on a desktop viewport: the shell is exactly one
+  viewport tall and each panel scrolls inside its own frame. Below lg the shell
+  falls back to a normal stacked scroll, because a phone cannot honestly show a
+  three-column intelligence board at once.
 */
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #060911;
-  color: #e2e8f0;
+  color: #2a2723;
+  font-family: 'Montserrat', system-ui, -apple-system, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Paper base with two soft warm blooms; the dot shader draws on top of this. */
+  background-color: #f4efe3;
+  background-image:
+    radial-gradient(58rem 40rem at 8% -8%, rgba(194, 96, 58, 0.13), transparent 62%),
+    radial-gradient(50rem 38rem at 96% 6%, rgba(110, 116, 85, 0.14), transparent 60%),
+    radial-gradient(44rem 34rem at 52% 112%, rgba(217, 168, 99, 0.14), transparent 62%);
+  background-attachment: fixed;
 }
 
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(60rem 40rem at 12% -10%, rgba(56, 189, 248, 0.16), transparent 60%),
-    radial-gradient(50rem 38rem at 88% 4%, rgba(167, 139, 250, 0.14), transparent 60%),
-    radial-gradient(46rem 34rem at 50% 108%, rgba(52, 211, 153, 0.10), transparent 62%);
+@media (min-width: 1024px) {
+  html,
+  body {
+    overflow: hidden;
+  }
 }
 
-/* Every panel is glass, so the app content must sit above the colour fields. */
+/* The shader canvas is fixed at z-0; every panel sits above it. */
 #root {
   position: relative;
   z-index: 1;
 }
 
-/*
-  Glass edge: a hairline highlight along the top of a panel, the detail that
-  separates real frosted glass from a flat translucent rectangle.
-*/
-.glass-edge {
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
-    0 16px 40px -12px rgba(2, 6, 23, 0.75);
+@layer components {
+  /*
+    Light glassmorphism: a bright translucent fill, a white hairline that catches
+    the top edge, and a warm drop shadow. The blur is what makes the dot grid
+    diffuse behind the panel instead of showing through crisply.
+  */
+  .glass-panel {
+    @apply rounded-2xl border border-white/70 bg-white/55 shadow-glass backdrop-blur-xl backdrop-saturate-150;
+  }
+
+  .glass-card {
+    @apply rounded-xl border border-white/70 bg-white/50 shadow-card backdrop-blur-lg backdrop-saturate-150;
+  }
+
+  /* Inner surface: sits on glass, so it is lighter and blurs less. */
+  .glass-inset {
+    @apply rounded-xl border border-white/55 bg-white/40 backdrop-blur-md;
+  }
+
+  .glass-field {
+    @apply rounded-lg border border-white/70 bg-white/65 backdrop-blur-sm transition-colors;
+  }
+
+  .glass-field:focus {
+    @apply border-clay/45 bg-white/85 outline-none;
+  }
 }
 
-.glass-lift {
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 220ms ease, border-color 220ms ease;
+@layer utilities {
+  /* Thin warm scrollbars: a default grey bar breaks the paper illusion. */
+  .thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(110, 116, 85, 0.4) transparent;
+  }
+
+  .thin-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .thin-scroll::-webkit-scrollbar-thumb {
+    background-color: rgba(110, 116, 85, 0.35);
+    border-radius: 9999px;
+  }
+
+  .thin-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(110, 116, 85, 0.55);
+  }
+
+  .thin-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Perspective container for the 3D tilt cards. */
+  .board-3d {
+    perspective: 1100px;
+  }
 }
 
-.glass-lift:hover {
-  transform: translateY(-3px);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
-    0 22px 48px -14px rgba(2, 6, 23, 0.9);
-}
-
-/* Dark, thin scrollbars — a light default scrollbar breaks the glass illusion. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
-}
-
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-*::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 163, 184, 0.28);
-  border-radius: 9999px;
-}
-
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-/* Range input on glass: the native track is opaque and reads as a seam. */
+/* Range input on light glass: the native track is opaque and reads as a seam. */
 input[type='range'] {
   height: 4px;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(42, 39, 35, 0.16);
   appearance: none;
 }
 
 input[type='range']::-webkit-slider-thumb {
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   border-radius: 9999px;
-  background: #38bdf8;
-  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
+  background: #c2603a;
+  box-shadow: 0 0 0 3px rgba(194, 96, 58, 0.22);
   cursor: pointer;
+}
+
+::selection {
+  background: rgba(194, 96, 58, 0.24);
 }

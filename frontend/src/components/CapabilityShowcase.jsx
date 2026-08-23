@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'framer-motion';
 import {
   X,
   Award,
@@ -43,25 +44,25 @@ const EVAL_ROWS = [
 
 function EvalTable() {
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/30 backdrop-blur-sm">
+    <div className="mt-3 overflow-hidden rounded-xl border border-white/70 bg-white/60 backdrop-blur">
       <table className="w-full text-left font-mono text-[11px]">
-        <thead className="border-b border-white/10 text-slate-400">
+        <thead className="border-b border-ink/10 text-ink/55">
           <tr>
             <th className="px-3 py-2 font-semibold">Metric</th>
             <th className="px-3 py-2 text-right font-semibold">Normal</th>
             <th className="px-3 py-2 text-right font-semibold">chaos_mode</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/[0.06]">
+        <tbody className="divide-y divide-ink/[0.07]">
           {EVAL_ROWS.map((r) => {
             // The two rows that carry the argument: the failure was injected and
             // recovered, and the task still completed either way.
             const key = r.normal !== r.chaos || r.metric === 'Task success';
             return (
-              <tr key={r.metric} className={key ? 'bg-sky-400/[0.06]' : ''}>
-                <td className="px-3 py-1.5 text-slate-300">{r.metric}</td>
-                <td className="px-3 py-1.5 text-right text-slate-100">{r.normal}</td>
-                <td className={`px-3 py-1.5 text-right ${key ? 'font-bold text-sky-200' : 'text-slate-100'}`}>
+              <tr key={r.metric} className={key ? 'bg-clay/[0.08]' : ''}>
+                <td className="px-3 py-1.5 text-ink/70">{r.metric}</td>
+                <td className="px-3 py-1.5 text-right text-ink">{r.normal}</td>
+                <td className={`px-3 py-1.5 text-right ${key ? 'font-bold text-clay-deep' : 'text-ink'}`}>
                   {r.chaos}
                 </td>
               </tr>
@@ -74,7 +75,7 @@ function EvalTable() {
 }
 
 /**
- * `onJump` scrolls to and flashes a real dashboard panel.
+ * `onJump` rings a real dashboard panel.
  * `onRunChaos` launches a real adversarial scan.
  */
 export default function CapabilityShowcase({ open, onClose, onJump, onRunChaos, chaosRunning, chaosArmed }) {
@@ -137,7 +138,7 @@ export default function CapabilityShowcase({ open, onClose, onJump, onRunChaos, 
       {/* Scrim: click-away close, and it dims the board so the panel reads as foreground. */}
       <div
         onClick={onClose}
-        className={`fixed inset-0 z-[60] bg-slate-950/70 backdrop-blur-sm transition-opacity duration-300 ${
+        className={`fixed inset-0 z-[60] bg-ink/25 backdrop-blur-sm transition-opacity duration-300 ${
           open ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
         aria-hidden="true"
@@ -147,49 +148,52 @@ export default function CapabilityShowcase({ open, onClose, onJump, onRunChaos, 
         role="dialog"
         aria-modal="true"
         aria-label="Capability showcase"
-        className={`fixed right-0 top-0 z-[61] flex h-full w-full max-w-xl flex-col border-l border-white/10 bg-slate-950/80 backdrop-blur-2xl transition-transform duration-300 ease-out ${
+        className={`fixed right-0 top-0 z-[61] flex h-full w-full max-w-xl flex-col border-l border-white/70 bg-sand/85 shadow-lift backdrop-blur-2xl transition-transform duration-300 ease-out ${
           open ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+        <header className="flex items-start justify-between gap-4 border-b border-ink/10 bg-white/45 px-5 py-4">
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-sky-500/90 p-2.5 text-white glass-edge">
+            <div className="rounded-xl bg-clay p-2.5 text-white shadow-card">
               <Award className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="font-serif text-lg font-bold tracking-tight text-slate-50">Capability Showcase</h2>
-              <p className="font-sans text-xs text-slate-400">
-                Each requirement, and where it actually runs in this dashboard
+              <h2 className="font-display text-lg font-extrabold tracking-tight text-ink">Capability Showcase</h2>
+              <p className="font-hand text-[15px] leading-tight text-moss">
+                each requirement, and where it actually runs
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             aria-label="Close capability showcase"
-            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+            className="rounded-lg p-1.5 text-ink/45 transition-colors hover:bg-white/70 hover:text-clay"
           >
             <X className="h-4 w-4" />
           </button>
         </header>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
-          {CAPABILITIES.map((cap) => {
+        <div className="thin-scroll flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          {CAPABILITIES.map((cap, i) => {
             const Icon = cap.icon;
             return (
-              <section
+              <motion.section
                 key={cap.title}
-                className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 backdrop-blur-xl glass-edge"
+                initial={false}
+                animate={open ? { opacity: 1, x: 0 } : { opacity: 0, x: 18 }}
+                transition={{ duration: 0.34, delay: open ? i * 0.045 : 0, ease: [0.22, 1, 0.36, 1] }}
+                className="glass-card p-4"
               >
-                <h3 className="flex items-center gap-2 font-serif text-sm font-semibold text-slate-50">
-                  <Icon className="h-4 w-4 shrink-0 text-sky-300" />
+                <h3 className="flex items-center gap-2 font-sans text-[13px] font-bold text-ink">
+                  <Icon className="h-4 w-4 shrink-0 text-clay" />
                   {cap.title}
                 </h3>
-                <p className="mt-2 font-sans text-xs leading-relaxed text-slate-300">{cap.body}</p>
+                <p className="mt-2 font-sans text-[11.5px] leading-relaxed text-ink/70">{cap.body}</p>
 
                 {cap.jump && (
                   <button
                     onClick={() => onJump(cap.jump.id)}
-                    className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-sky-400/40 bg-sky-400/10 px-3 py-1.5 font-mono text-[11px] font-semibold text-sky-200 transition-colors hover:bg-sky-400/20"
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-clay/40 bg-clay/10 px-3 py-1.5 font-mono text-[11px] font-bold text-clay-deep transition-colors hover:bg-clay hover:text-white"
                   >
                     {cap.jump.label}
                     <ArrowRight className="h-3 w-3" />
@@ -201,7 +205,7 @@ export default function CapabilityShowcase({ open, onClose, onJump, onRunChaos, 
                     <button
                       onClick={onRunChaos}
                       disabled={chaosRunning}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/45 bg-rose-500/15 px-3 py-1.5 font-mono text-[11px] font-bold text-rose-100 transition-colors hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/60 bg-rose-500/15 px-3 py-1.5 font-mono text-[11px] font-bold text-rose-800 transition-colors hover:bg-rose-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {chaosRunning ? (
                         <>
@@ -215,13 +219,13 @@ export default function CapabilityShowcase({ open, onClose, onJump, onRunChaos, 
                         </>
                       )}
                     </button>
-                    <p className="font-mono text-[10px] leading-relaxed text-slate-400">
-                      Runs a real scan with <span className="text-rose-300">chaos_mode=tool_failure</span>. The
+                    <p className="font-mono text-[10px] leading-relaxed text-ink/55">
+                      Runs a real scan with <span className="font-bold text-rose-700">chaos_mode=tool_failure</span>. The
                       authoritative patent tiers are forced to raise; watch the trace fill with rose
-                      <span className="text-rose-300"> CHAOS</span> rows and the scan still complete from the
+                      <span className="font-bold text-rose-700"> CHAOS</span> rows and the scan still complete from the
                       fallback tier.
                       {chaosArmed && !chaosRunning && (
-                        <span className="mt-1 block font-bold text-rose-300">
+                        <span className="mt-1 block font-bold text-rose-700">
                           Last scan ran with fault injection active.
                         </span>
                       )}
@@ -232,18 +236,18 @@ export default function CapabilityShowcase({ open, onClose, onJump, onRunChaos, 
                 {cap.table && <EvalTable />}
 
                 {cap.note && (
-                  <p className="mt-2 border-l-2 border-amber-400/50 pl-3 font-sans text-[11px] leading-relaxed text-amber-200/90">
+                  <p className="mt-2 border-l-2 border-ochre pl-3 font-sans text-[11px] leading-relaxed text-ochre-deep">
                     {cap.note}
                   </p>
                 )}
-              </section>
+              </motion.section>
             );
           })}
         </div>
 
-        <footer className="border-t border-white/10 px-6 py-3 font-mono text-[10px] text-slate-500">
-          Numbers from <span className="text-slate-300">eval_report.md</span>, generated by{' '}
-          <span className="text-slate-300">backend/eval_and_trace.py</span>. Re-run it to regenerate.
+        <footer className="border-t border-ink/10 bg-white/45 px-5 py-2.5 font-mono text-[10px] text-ink/50">
+          Numbers from <span className="font-bold text-ink/75">eval_report.md</span>, generated by{' '}
+          <span className="font-bold text-ink/75">backend/eval_and_trace.py</span>. Re-run it to regenerate.
         </footer>
       </aside>
     </>
