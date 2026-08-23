@@ -17,7 +17,11 @@ export async function checkHealth() {
   }
 }
 
-export async function runScanStream(topic, competitors, maxItems = 5, model = DEFAULT_MODEL, onChunk) {
+/**
+ * `chaosMode` is the backend's deliberate fault-injection switch (e.g. 'tool_failure').
+ * It is only sent when explicitly passed, so a normal scan is byte-identical to before.
+ */
+export async function runScanStream(topic, competitors, maxItems = 5, model = DEFAULT_MODEL, onChunk, chaosMode = null) {
   const res = await fetch(`${API_BASE_URL}/api/scan/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -25,7 +29,8 @@ export async function runScanStream(topic, competitors, maxItems = 5, model = DE
       topic,
       competitors,
       max_items: maxItems,
-      model
+      model,
+      ...(chaosMode ? { chaos_mode: chaosMode } : {})
     })
   });
 
@@ -68,7 +73,7 @@ export async function runScanStream(topic, competitors, maxItems = 5, model = DE
   }
 }
 
-export async function runScan(topic, competitors, maxItems = 5, model = DEFAULT_MODEL) {
+export async function runScan(topic, competitors, maxItems = 5, model = DEFAULT_MODEL, chaosMode = null) {
   const res = await fetch(`${API_BASE_URL}/api/scan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -76,7 +81,8 @@ export async function runScan(topic, competitors, maxItems = 5, model = DEFAULT_
       topic,
       competitors,
       max_items: maxItems,
-      model
+      model,
+      ...(chaosMode ? { chaos_mode: chaosMode } : {})
     })
   });
 

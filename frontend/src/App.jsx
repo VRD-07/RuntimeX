@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 
 import AgentDebugView from './debug/AgentDebugView';
+import CapabilityShowcase from './components/CapabilityShowcase';
 import { checkHealth, runScan, runScanStream, sendChatMessage } from './api';
 
 import { 
@@ -25,7 +26,8 @@ import {
   History,
   Clock,
   ArrowRight,
-  AlertTriangle
+  AlertTriangle,
+  Award
 } from 'lucide-react';
 
 // Synthesis is served by Gemini. These ids must match SUPPORTED_GEMINI_MODELS in the backend.
@@ -253,6 +255,13 @@ export default function App() {
   // rest of the page combined.
   const [openTraceSteps, setOpenTraceSteps] = useState({});
 
+  // Judge showcase state. flashPanel is the id of the panel currently being
+  // highlighted after a jump; chaosArmed records whether the scan on screen was
+  // run with fault injection, so the trace can never be mistaken for an outage.
+  const [showcaseOpen, setShowcaseOpen] = useState(false);
+  const [flashPanel, setFlashPanel] = useState(null);
+  const [chaosArmed, setChaosArmed] = useState(false);
+
   // Chat state
   const [chatMessages, setChatMessages] = useState([]);
   const [userQuestion, setUserQuestion] = useState('');
@@ -283,13 +292,14 @@ export default function App() {
     }
   }, [scanResult]);
 
-  const handleScan = async (e) => {
+  const handleScan = async (e, { chaosMode = null } = {}) => {
     if (e) e.preventDefault();
     setScanResult(null);
     setScanError(null);
     setLoading(true);
     setStaggeredStepCount(0);
     setOpenTraceSteps({});
+    setChaosArmed(!!chaosMode);
 
     let dynamicTrace = [];
 
@@ -347,11 +357,11 @@ export default function App() {
             trace: dynamicTrace
           });
         }
-      });
+      }, chaosMode);
     } catch (err) {
       console.warn('Streaming failed, retrying with non-streaming scan:', err);
       try {
-        const data = await runScan(topic, competitors, maxItems, model);
+        const data = await runScan(topic, competitors, maxItems, model, chaosMode);
         setScanResult(data);
       } catch (fallbackErr) {
         console.error('Scan failed:', fallbackErr);
@@ -361,6 +371,34 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * Scrolls a real dashboard panel into view and rings it briefly, so a jump
+   * from the showcase lands somewhere the reviewer can see it landed.
+   */
+  const jumpToPanel = (id) => {
+    setShowcaseOpen(false);
+    setFlashPanel(id);
+    // One frame after the slide-over starts closing, so the scroll is not
+    // fighting the panel's transform.
+    requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    setTimeout(() => setFlashPanel(null), 2400);
+  };
+
+  // Ring applied to whichever panel was just jumped to.
+  const flashCls = (id) => (flashPanel === id ? ' ring-2 ring-sky-400/70 ring-offset-2 ring-offset-slate-950' : '');
+
+  /** Fires a real scan with the backend's chaos_mode=tool_failure fault injection. */
+  const handleChaosScan = () => {
+    setShowcaseOpen(false);
+    setTraceExpanded(true);
+    requestAnimationFrame(() => {
+      document.getElementById('trace-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    handleScan(null, { chaosMode: 'tool_failure' });
   };
 
   const handleSendChat = async (e) => {
@@ -506,6 +544,15 @@ export default function App() {
   return (
     <div className="min-h-screen text-slate-100 flex flex-col font-sans selection:bg-sky-500/40 selection:text-white relative overflow-x-hidden">
       
+      <CapabilityShowcase
+        open={showcaseOpen}
+        onClose={() => setShowcaseOpen(false)}
+        onJump={jumpToPanel}
+        onRunChaos={handleChaosScan}
+        chaosRunning={loading && chaosArmed}
+        chaosArmed={chaosArmed}
+      />
+
       {/* GLOBAL HEADER */}
       <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/60 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -527,6 +574,15 @@ export default function App() {
                 {loading ? 'ReAct Loop Active...' : 'System Live'}
               </span>
             </div>
+
+            {/* Judge-facing capability showcase */}
+            <button
+              onClick={() => setShowcaseOpen(true)}
+              className="flex items-center gap-2 rounded-lg border border-sky-400/40 bg-sky-400/10 px-3 py-1.5 font-mono text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-400/20"
+            >
+              <Award className="h-4 w-4" />
+              <span className="hidden sm:inline">Capability Showcase</span>
+            </button>
 
             {/* Dynamic Model Selector Badge */}
             <div className="flex items-center space-x-2 bg-slate-950/55 backdrop-blur-2xl text-slate-100 px-3 py-1.5 rounded-lg border border-white/10 text-xs font-mono">
@@ -645,7 +701,10 @@ export default function App() {
           </div>
 
           {/* VISIBLE MEMORY TRACE PANEL (PART C) */}
-          <div className="bg-white/[0.07] backdrop-blur-2xl border-2 border-white/10 rounded-2xl p-5 glass-edge space-y-3 font-mono text-xs">
+          <div
+            id="memory-panel"
+            className={`bg-white/[0.07] backdrop-blur-2xl border-2 border-white/10 rounded-2xl p-5 glass-edge space-y-3 font-mono text-xs scroll-mt-24 transition-shadow duration-300${flashCls('memory-panel')}`}
+          >
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <span className="font-serif font-bold text-slate-100 flex items-center gap-1.5">
                 <History className="w-4 h-4 text-sky-300" />
@@ -783,7 +842,10 @@ export default function App() {
         </div>
 
           {/* SECTION 3: UNIFIED FILTERABLE FINDINGS GRID */}
-          <div className="bg-white/[0.07] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 glass-edge space-y-6">
+          <div
+            id="findings-board"
+            className={`bg-white/[0.07] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 glass-edge space-y-6 scroll-mt-24 transition-shadow duration-300${flashCls('findings-board')}`}
+          >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/10 pb-4 gap-4">
               <div>
                 <h3 className="font-serif font-bold text-lg text-slate-100 flex items-center gap-2">
@@ -848,7 +910,20 @@ export default function App() {
           </div>
 
           {/* SECTION 4: AGENT REASONING TRACE */}
-          <div className="bg-slate-950/55 backdrop-blur-2xl text-slate-100 border border-white/10 rounded-2xl glass-edge overflow-hidden font-mono text-xs">
+          <div
+            id="trace-panel"
+            className={`bg-slate-950/55 backdrop-blur-2xl text-slate-100 border border-white/10 rounded-2xl glass-edge overflow-hidden font-mono text-xs scroll-mt-24 transition-shadow duration-300${flashCls('trace-panel')}`}
+          >
+            {chaosArmed && (
+              <div className="flex items-start gap-2 border-b border-rose-400/30 bg-rose-500/15 px-6 py-2.5 font-mono text-[11px] text-rose-100">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-300" />
+                <span>
+                  <span className="font-bold text-rose-200">Adversarial run:</span> this scan was launched with{' '}
+                  <span className="text-rose-200">chaos_mode=tool_failure</span>. Rose CHAOS rows below are
+                  deliberately injected faults, not a real outage.
+                </span>
+              </div>
+            )}
             <button
               onClick={() => setTraceExpanded(!traceExpanded)}
               className="w-full px-6 py-4 flex items-center justify-between border-b border-white/10 bg-slate-950/55 backdrop-blur-2xl hover:bg-white/[0.06] transition-colors text-left"
