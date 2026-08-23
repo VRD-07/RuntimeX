@@ -89,8 +89,15 @@ class ScanRequest(BaseModel):
     topic: str = Field(default="Regional language capabilities for AI", description="Research topic or domain to scan")
     competitors: str = Field(default="Sarvam, OpenAI, Google", description="Comma-separated competitor names or keywords")
     max_items: int = Field(default=5, ge=1, le=10, description="Items to fetch per source")
-    max_steps: int = Field(default=12, ge=1, le=24, description="Maximum number of grounded tool calls per scan")
+    # Bounds tool calls only; the two analyst steps sit outside this budget. The
+    # initial scan issues 4 calls per competitor plus 3 topic-level calls, so the
+    # default has to clear 4*N + 3.
+    max_steps: int = Field(default=18, ge=1, le=30, description="Maximum number of grounded tool calls per scan")
     model: Optional[str] = Field(default=DEFAULT_GEMINI_MODEL, description="Gemini model id used for synthesis")
+    # Deliberate fault injection for the adversarial demo. Comma-separated; only
+    # 'tool_failure', 'conflicting_evidence' and 'budget_exhaustion' are honoured,
+    # and nothing activates unless this is explicitly sent.
+    chaos_mode: Optional[str] = Field(default=None, description="Comma-separated chaos modes, e.g. 'tool_failure'")
 
 
 class ScanResponse(BaseModel):
@@ -106,6 +113,8 @@ class ScanResponse(BaseModel):
     patents: List[Dict[str, Any]] = []
     github_repos: List[Dict[str, Any]] = []
     reddit_posts: List[Dict[str, Any]] = []
+    hf_models: List[Dict[str, Any]] = []
+    hn_posts: List[Dict[str, Any]] = []
     trace: List[Dict[str, Any]] = []
     memory_recall: Optional[Dict[str, Any]] = None
     llm_active: bool
@@ -125,6 +134,8 @@ class ChatRequest(BaseModel):
     context_patents: List[Dict[str, Any]] = []
     context_github: List[Dict[str, Any]] = []
     context_reddit: List[Dict[str, Any]] = []
+    context_models: List[Dict[str, Any]] = []
+    context_hackernews: List[Dict[str, Any]] = []
     model: Optional[str] = DEFAULT_GEMINI_MODEL
 
 
@@ -164,13 +175,23 @@ def health_check():
     }
 
 
+def _chaos_modes(request: ScanRequest, query_override: Optional[str]) -> List[str]:
+    """
+    Resolves chaos modes from the query string or the body, query string winning.
+    The query form exists so a live demo can flip the switch from the URL bar
+    without editing a request payload.
+    """
+    raw = query_override if query_override is not None else request.chaos_mode
+    return [m for m in (raw or "").split(",") if m.strip()]
+
+
 @app.post("/api/scan/stream")
-def stream_autonomous_scan(request: ScanRequest):
+def stream_autonomous_scan(request: ScanRequest, chaos_mode: Optional[str] = None):
     """
     Real-time streaming endpoint.
     Yields memory recall, agent thoughts, actions, observations, and the final report as NDJSON.
     """
-    agent = AutonomousReActAgent(model=request.model)
+    agent = AutonomousReActAgent(model=request.model, chaos_modes=_chaos_modes(request, chaos_mode))
     return StreamingResponse(
         agent.stream_scan(
             topic=request.topic,
@@ -183,13 +204,13 @@ def stream_autonomous_scan(request: ScanRequest):
 
 
 @app.post("/api/scan", response_model=ScanResponse)
-def run_autonomous_scan(request: ScanRequest):
+def run_autonomous_scan(request: ScanRequest, chaos_mode: Optional[str] = None):
     """
     Non-streaming scan endpoint. Runs the full orchestration and returns the complete result.
     Also serves as the frontend's fallback when the streaming connection fails.
     """
     try:
-        agent = AutonomousReActAgent(model=request.model)
+        agent = AutonomousReActAgent(model=request.model, chaos_modes=_chaos_modes(request, chaos_mode))
         result = agent.run_scan(
             topic=request.topic,
             competitors=request.competitors,
@@ -210,6 +231,8 @@ def run_autonomous_scan(request: ScanRequest):
             patents=result.get("patents", []),
             github_repos=result.get("github_repos", []),
             reddit_posts=result.get("reddit_posts", []),
+            hf_models=result.get("hf_models", []),
+            hn_posts=result.get("hn_posts", []),
             trace=result.get("trace", []),
             memory_recall=result.get("memory_recall"),
             llm_active=result.get("llm_active", False),
@@ -247,6 +270,8 @@ def analyst_chat(request: ChatRequest):
             format_context_items("PATENT FINDINGS", request.context_patents),
             format_context_items("GITHUB FINDINGS", request.context_github),
             format_context_items("REDDIT COMMUNITY FINDINGS", request.context_reddit),
+            format_context_items("PUBLISHED MODEL TRACTION (HUGGING FACE)", request.context_models),
+            format_context_items("HACKER NEWS ENGAGEMENT", request.context_hackernews),
         ])
 
         history = [m.model_dump() for m in (request.chat_history or [])]

@@ -45,6 +45,8 @@ Server runs at `http://localhost:8000`; Swagger UI at **`http://localhost:8000/d
 | `POST` | `/api/scan` | Same scan, buffered into a single JSON response |
 | `POST` | `/api/chat` | Analyst follow-up, grounded in the findings passed as `context_*` arrays |
 
+Both scan endpoints also accept `chaos_mode` (body field or `?chaos_mode=tool_failure` query param) for the adversarial demo. `tool_failure` makes the authoritative patent tiers raise, so the existing three-tier fallback ladder recovers and the scan still completes; the trace step is labelled `step_type: "chaos"` so a deliberate failure can never be read as a real outage. Nothing activates unless the parameter is explicitly sent.
+
 `/api/scan` accepts `topic`, `competitors` (a **comma-separated string**, e.g. `"Sarvam, OpenAI, Google"`), `max_items` (1–10), `max_steps` (1–30, default 18) and `model`. A non-Gemini `model` is logged and resolved to `GEMINI_MODEL` rather than rejected.
 
 `max_steps` bounds **tool calls only** — the two analyst steps sit outside that budget. The initial scan issues 4 calls per competitor (news, model hub, Reddit, Hacker News) plus 3 topic-level calls, so the default clears `4 * N + 3` for a three-competitor scan.

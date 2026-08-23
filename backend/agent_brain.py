@@ -10,6 +10,8 @@ from tools.github_tool import search_github
 from tools.reddit_tool import search_reddit
 from tools.hf_tool import search_huggingface_models
 from tools.hn_tool import search_hackernews
+
+import chaos
 from memory_db import init_memory_db, get_prior_scan_memory, save_scan_memory, compute_memory_delta
 
 logger = logging.getLogger(__name__)
@@ -250,9 +252,11 @@ class FieldAgent:
     and returns grounded observations.
     Does NOT synthesize summaries or conclusions.
     """
-    def __init__(self, model: Optional[str] = None):
+    def __init__(self, model: Optional[str] = None, chaos_modes: Optional[List[str]] = None):
         self.model_name = resolve_model(model)
         self.role_name = "Field Agent"
+        # Demo fault injection. Empty unless the request explicitly asked for it.
+        self.chaos_modes = chaos.normalize(chaos_modes)
 
     def execute_targeted_followup(self, question: str, max_items: int = 3) -> Dict[str, Any]:
         """
@@ -294,8 +298,15 @@ class FieldAgent:
             "action": action,
         }
 
+        # Only the chaos target accepts chaos_modes, so the kwarg is added
+        # conditionally rather than widening every tool's signature.
+        kwargs: Dict[str, Any] = {"max_results": max_items}
+        is_chaos_target = bool(self.chaos_modes) and tool_fn.__name__ == chaos.CHAOS_TOOL_TARGET
+        if is_chaos_target:
+            kwargs["chaos_modes"] = self.chaos_modes
+
         try:
-            result = tool_fn(query, max_results=max_items)
+            result = tool_fn(query, **kwargs)
         except Exception as e:
             logger.error(f"[Field Agent] Tool {tool_fn.__name__} failed for query '{query}': {e}")
             result = {
@@ -304,7 +315,7 @@ class FieldAgent:
                 "source_type": None,
             }
 
-        yield {
+        completion: Dict[str, Any] = {
             "type": "step_complete",
             "agent_role": self.role_name,
             "step": step,
@@ -315,6 +326,12 @@ class FieldAgent:
             "source_type": result["source_type"],
             "entity": entity,
         }
+        if is_chaos_target and chaos.active(self.chaos_modes, chaos.TOOL_FAILURE):
+            # Labelled in the trace so a deliberately broken tool can never be
+            # read as a real outage by a judge, or by us later.
+            completion["chaos"] = True
+            completion["step_type"] = "chaos"
+        yield completion
 
     def gather_observations_stream(self, topic: str, competitors: str, max_items: int = 5, start_step: int = 1,
                                    is_gap_fill: bool = False, gap_entities: Optional[List[str]] = None,
@@ -576,8 +593,8 @@ class OrchestratorAgent:
     4. If gaps exist, Field Agent runs one targeted gap-fill pass.
     5. Analyst Agent writes the executive summary; the delta vs. prior memory is computed and stored.
     """
-    def __init__(self, model: Optional[str] = None):
-        self.field_agent = FieldAgent(model)
+    def __init__(self, model: Optional[str] = None, chaos_modes: Optional[List[str]] = None):
+        self.field_agent = FieldAgent(model, chaos_modes=chaos_modes)
         self.analyst_agent = AnalystAgent(model)
 
     def stream_orchestration(self, topic: str, competitors: str, max_items: int = 5, max_steps: int = 18) -> Generator[str, None, None]:
@@ -744,9 +761,9 @@ class AutonomousReActAgent:
     """
     Backwards-compatible interface wrapper routing to OrchestratorAgent.
     """
-    def __init__(self, model: Optional[str] = None):
-        self.orchestrator = OrchestratorAgent(model)
-        self.field_agent = FieldAgent(model)
+    def __init__(self, model: Optional[str] = None, chaos_modes: Optional[List[str]] = None):
+        self.orchestrator = OrchestratorAgent(model, chaos_modes=chaos_modes)
+        self.field_agent = FieldAgent(model, chaos_modes=chaos_modes)
 
     def stream_scan(self, topic: str = "Regional language capabilities for AI", competitors: str = "Sarvam, OpenAI, Google", max_items: int = 5, max_steps: int = 18) -> Generator[str, None, None]:
         return self.orchestrator.stream_orchestration(topic, competitors, max_items, max_steps)

@@ -42,6 +42,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import httpx
 
+import chaos
+
 logger = logging.getLogger(__name__)
 
 EPO_AUTH_URL = "https://ops.epo.org/3.2/auth/accesstoken"
@@ -584,7 +586,7 @@ def _source_name(record: Dict[str, Any], tier_label: str) -> str:
     return " | ".join(bits)
 
 
-def search_patents(query: str, max_results: int = 5) -> Dict[str, Any]:
+def search_patents(query: str, max_results: int = 5, chaos_modes: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Searches patent filings for a topic or company, preferring Indian jurisdictions.
 
@@ -592,6 +594,11 @@ def search_patents(query: str, max_results: int = 5) -> Dict[str, Any]:
     XHR endpoint, then a labelled Google Patents web search. The observation text
     always names the tier that produced the data so a fallback is never presented
     as a verified database query.
+
+    ``chaos_modes`` is the demo fault-injection switch. When it contains
+    ``tool_failure`` the two authoritative tiers raise instead of running, which
+    forces the real ladder to fall through to the web-search tier. The recovery
+    that executes is the production recovery, not a rehearsal of it.
 
     Returns {"text": <observation for the LLM>, "items": [...], "source_type": "patents"}.
     """
@@ -612,7 +619,19 @@ def search_patents(query: str, max_results: int = 5) -> Dict[str, Any]:
 
     for short_name, label, fn in tiers:
         attempted.append(short_name)
-        records, note = fn(terms, max_results)
+        try:
+            # Chaos breaks only the authoritative tiers. Breaking the last tier too
+            # would prove nothing except that a tool with no fallback left fails.
+            if short_name != "web search":
+                chaos.maybe_break_tool(chaos_modes, "search_patents")
+            records, note = fn(terms, max_results)
+        except Exception as e:
+            # A raising tier is treated exactly like an empty one: log it, note it,
+            # and drop to the next rung. This is the path a real outage takes, and
+            # it is the path chaos_mode='tool_failure' is injected into.
+            logger.warning(f"[Patents] Tier '{short_name}' raised, falling through to the next tier: {e}")
+            notes.append(f"tier '{short_name}' failed: {e}")
+            records, note = [], None
         if note:
             notes.append(note)
         if records:
